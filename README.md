@@ -2,6 +2,10 @@
 
 MORPH is an offline Android file converter with byte-verified compression. Convert images, video, audio, documents, spreadsheets, and archives. Set a size ceiling for a file or batch, or use exact-byte padding for compatible formats.
 
+## Download
+
+Get the [compact ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/download/v1.0.2/MORPH-arm64.apk) for most Android phones. The [MORPH 1.0.2 release](https://github.com/Cronesofdeath/MORPH/releases/tag/v1.0.2) also includes the universal APKs and SHA-256 checksums.
+
 ## Build
 
 Open this repository in Android Studio with JDK 17 and Android SDK 37. MORPH targets Android 15 and supports Android 8.0 and later on ARM64 and x86-64.
