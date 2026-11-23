@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Morph" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#0B0D10</item>
+        <item name="android:colorAccent">#2563EB</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
