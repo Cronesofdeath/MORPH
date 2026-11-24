@@ -47,7 +47,7 @@ The converter shows routes for the detected source. A cap is verified before a j
 
 MORPH processes files locally and ships without Internet or network-state permissions. The release verification script checks both the merged manifest and packaged APK. See the [privacy policy](PRIVACY.md).
 
-The 1.0.0 ARM64 APK is **37,569,764 bytes**. Its merged manifest and packaged APK exclude both network permissions. All 13 ARM64 libraries passed the 16 KB ELF check. See the [release audit](RELEASE-AUDIT.md) for the permission list and results.
+All 13 ARM64 libraries passed the 16 KB ELF check. See the [release audit](RELEASE-AUDIT.md) for the permission list and results.
 
 ## Measured conversions
 
