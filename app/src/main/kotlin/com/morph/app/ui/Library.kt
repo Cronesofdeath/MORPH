@@ -205,6 +205,24 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
         listOf("Saved outputs" to total(File(ctx.filesDir,"exports")),"Imported copies" to total(File(ctx.filesDir,"imports")),"Working files" to total(File(ctx.cacheDir,"morph_work")))
     } }
     Page("Settings","Appearance and diagnostics") {
+        Panel {
+            Label("About MORPH")
+            val version = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+            Text("Version $version",style=mono)
+            Text("MORPH processes files on-device. The app has no Internet permission and includes no MORPH telemetry.")
+            Text("GPL-3.0 source. Bundled libraries include FFmpegKit, Apache POI, PDFBox and Google ML Kit, which has its own terms.")
+            val links = listOf(
+                "Source and GPL-3.0 license" to "https://github.com/Cronesofdeath/MORPH",
+                "Third-party licenses" to "https://github.com/Cronesofdeath/MORPH/blob/main/THIRD_PARTY_NOTICES.md",
+                "Privacy policy" to "https://github.com/Cronesofdeath/MORPH/blob/main/PRIVACY.md"
+            )
+            links.forEach { (label,url) ->
+                TextButton({
+                    try { ctx.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(url))) }
+                    catch (_: ActivityNotFoundException) { scope.launch { android.widget.Toast.makeText(ctx,url,android.widget.Toast.LENGTH_LONG).show() } }
+                }) { Text(label) }
+            }
+        }
         Panel {Label("Appearance")
             Choices(listOf("System","Light","Dark","OLED"),mode) { choice -> scope.launch {ctx.preferences.edit {it[stringPreferencesKey("theme")]=choice}}}
             if(Build.VERSION.SDK_INT>=31) Toggle("Dynamic color",dynamic) {v->scope.launch {ctx.preferences.edit {it[booleanPreferencesKey("dynamic")]=v}}}

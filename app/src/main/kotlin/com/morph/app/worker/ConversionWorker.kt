@@ -122,6 +122,11 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
                 withContext(NonCancellable) { dao.updateActive(job.id, "Queued", "Waiting to resume") }
             }
             throw e
+        } catch(e:OutOfMemoryError) {
+            if (published) Result.success() else {
+                dao.updateActive(job.id, "Failed", "This file exceeded available memory. Try a smaller source or convert one item at a time.")
+                Result.failure()
+            }
         } catch(e:Exception) {
             if (published) Result.success() else {
                 dao.updateActive(job.id, "Failed", MorphError.explain(e), (e as? TargetTooSmall)?.minimum ?: 0)

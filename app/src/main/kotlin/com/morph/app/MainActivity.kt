@@ -37,11 +37,15 @@ class MainActivity:ComponentActivity() {
                 }
             }.distinct()
             if (uris.isNotEmpty()) {
+                model.openSharedFiles()
                 model.pick(uris, false)
             } else {
                 val text = incoming.getCharSequenceExtra(Intent.EXTRA_TEXT)
                     ?: clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text
-                text?.toString()?.let(model::paste)
+                if (!text.isNullOrBlank()) {
+                    model.openSharedFiles()
+                    model.paste(text.toString())
+                }
             }
         } catch (e: RuntimeException) {
             model.events.tryEmit("The shared item could not be read")

@@ -1,54 +1,55 @@
-# MORPH 1.0.2 release audit
+# MORPH release audit
 
-**Decision.** Greenlit for private hands-on testing. Public release requires the physical-device and format-fidelity checks in this report.
+## Version 1.0.0, version code 6
 
-## Verification results
+Local release verification was performed on November 24, 2026. The packaged ARM64 build uses the existing Android development certificate. It can update the prior public APK for local testing. Production signing requires maintainer credentials.
 
-| Suite | Result |
-| --- | --- |
-| JVM unit and regression tests | 27 passed |
-| Android 8.0 x86-64 emulator | 20 passed. The automatic Downloads save failure check applies to Android 10 and later. |
-| Android 15 x86-64 emulator | 21 passed, including the automatic save failure check. |
+| Gate | Command | Result |
+|---|---|---|
+| JVM | `.\gradlew.bat :app:testDebugUnitTest` | 37 tests passed |
+| Debug lint | `.\gradlew.bat :app:lintDebug` | 0 errors, 35 warnings |
+| Signing without credentials | `.\gradlew.bat :app:requireReleaseSigning -PcompactArm64=true` | Rejected with the expected signing message |
+| Compact ARM64 | `.\gradlew.bat :app:assembleRelease -PcompactArm64=true -PallowDevSign=true -PinspectR8=true` | R8, resource shrinking, vital lint and packaging passed in 10m 44s |
+| Package | `.\tools\Test-ReleasePackage.ps1 -Archive app/build/compact-arm64/outputs/apk/release/app-release.apk` | APK Signature Scheme v2 verified, 13 of 13 ARM64 libraries 16 KB aligned, both ART baseline profiles present |
+| Android 15 x86-64 | `adb shell am instrument -w com.morph.app.test/androidx.test.runner.AndroidJUnitRunner` | 27 passed in 79.711 s, including share intake from Vault, activity recreation, 50 KiB conversion of the mislabeled fixture, and impossible-cap cleanup |
+| Minified runtime smoke | `.\gradlew.bat :app:assembleRelease -PallowDevSign=true`, then `.\tools\Test-DocumentPicker.ps1 -Serial emulator-5570 -CapKiB 50` and the same command with `-CapKiB 100` | Universal minified build installed and passed the picker-to-Downloads flow at both caps. 50 KiB produced 47,894 bytes in 19.54 s, and 100 KiB produced 100,282 bytes in 17.25 s. Times include UI automation. |
 
-The optimized universal build also installed on Android 15, accepted shared text, converted it to PDF, and saved the result to Downloads. The full debug lint run was stopped when it held Windows build files open during the compatibility rerun. Android's release-critical lint checks passed during packaging.
+Lint warnings include KTX and version-catalog suggestions, free-space hints, optional TLS code in upstream libraries, and platform or dependency advisories. The two command-line builds used `--offline --max-workers=2 --console=plain`.
 
-All three APKs were rebuilt. The compact ARM64 APK is 31,247,064 bytes. It passed signature, ABI, 16 KB native alignment, and offline manifest checks. It uses the same signing key as the previous test build.
+### Compact footprint
 
-SHA-256 for the tested local `MORPH-arm64.apk` is `f166e6cc264d35c9ef01c5db15f89465b8913fab0226ed7badd3c6a4767f8713`.
+DEX and native metrics sum uncompressed ZIP entries. APK size is the on-disk download size.
 
-The local workspace holds the HTML reports under `APKs/Test reports`. The commands below regenerate the reports under `app/build/reports`.
+| Metric | Published build 5 | Local build 6 |
+|---|---:|---:|
+| DEX count | 3 | 3 |
+| DEX bytes | 15,824,636 | 14,720,136 |
+| ARM64 shared library bytes | 47,420,840 | 47,420,840 |
+| APK bytes | 38,715,540 | 37,569,764 |
+| ART baseline profile bytes | 12,436 | 12,391 |
+| ART baseline profile metadata bytes | 1,625 | 1,635 |
 
-## Findings addressed
+The active R8 configuration includes the optimized Android defaults and dependency consumer rules. Application rules remove debug and verbose logging and replace the PDFBox package-wide keep rule with the narrower font rule. The POI schema reflection and FFmpegKit JNI rules remain in place.
 
-| Finding | Change |
-| --- | --- |
-| Duplicate, blank, or ragged CSV headers could overwrite columns in JSON, XML, and SQL exports. | Allocate a unique key for every column and retain trailing values. |
-| OpenDocument repeat markers could drop cells or shift columns. | Expand meaningful repeated rows and columns within a bounded editing budget. |
-| Invalid Base64 could decode partially and appear successful. | Stream input with strict alphabet, padding, and trailing-bit checks, while accepting line wrapping. |
-| Concatenated BZIP2 and XZ streams could lose their later members. | Decode all members and bound archive decoder memory. |
-| A renamed single GZIP stream could be mistaken for a compressed TAR. | Inspect the decompressed header before identifying TAR. |
-| A short BMP signature could misclassify ordinary text. | Validate the bitmap header before selecting that format. |
-| Scientific notation with extreme exponents and long Unicode filenames could break input handling. | Bound decimal input and limit sanitized filenames by UTF-8 bytes. |
-| A slow worker could race a cancellation or a revoked save destination could mark a converted file failed. | Make terminal status changes conditional, serialize conversion engines, keep a verified Vault output if automatic saving fails, and move verified files into place when storage permits. |
-| The older bitmap decoder could disregard requested dimensions and JPEG rotation. | Apply both dimension limits and honor EXIF orientation in the fallback. |
-| Archive conversion exposed one password for two different operations. | Accept separate input and output passwords and protect both with Android Keystore. |
-| Tiny JPEG padding gaps and ambiguous PDF page ranges handled edge cases poorly. | Support legal JPEG marker fill and validate PDF ranges before processing. |
-| Duplicate JSON keys or concatenated JSON values could silently discard data. | Reject ambiguous input and preserve decimal precision. |
+### Merged release manifest permission dump
 
-## Release gates
-
-- Test the signed ARM64 build on a physical phone. Exercise HEIC, 4K video, a multi-gigabyte file, low free storage, and cancellation with the screen locked. Verify outputs after the OS stops and restarts a job.
-- Compare representative complex Office files and ebooks with the source applications. Legacy PPT export uses slide text. Complex document layout and workbook features have limited fidelity.
-- Exercise real document providers and revoked folder access on physical phones. The automated suite uses local emulator storage.
-- Review the resolved dependencies and native codec provenance for distribution. The FFmpegKit full GPL distribution and the Android PDFBox fork warrant a maintained dependency inventory and review. The upstream PDFBox embedded-file advisories describe an examples module. MORPH uses the Android library and has its own archive extraction path. [FFmpegKit releases](https://github.com/ffmpegkit-maintained/ffmpeg/releases) · [Apache PDFBox advisories](https://pdfbox.apache.org/security.html) · [Apache POI guidance](https://poi.apache.org/security.html)
-- Configure production signing before public distribution. The compact APK is signed with the development key for in-place upgrades during testing.
-
-## Reproduce on Windows
-
-```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:connectedDebugAndroidTest
-.\gradlew.bat :app:assembleRelease
-.\gradlew.bat :app:assembleRelease -PcompactArm64=true
+```text
+android.permission.FOREGROUND_SERVICE
+android.permission.FOREGROUND_SERVICE_DATA_SYNC
+android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING
+android.permission.POST_NOTIFICATIONS
+android.permission.RECEIVE_BOOT_COMPLETED
+android.permission.WAKE_LOCK
+com.morph.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION
 ```
 
-The test suites use generated fixtures. Coverage includes a 144-megapixel PNG, a 256 MiB streamed archive with a trailing member, a 50-image PDF, multiple JPEG padding boundaries, exact PDF reopening, encrypted ZIP password rotation, malformed input, numeric limits, and the ordinary audio, video, and archive output matrices.
+The packaged APK declared the same permission set. Both checks excluded `android.permission.INTERNET` and `android.permission.ACCESS_NETWORK_STATE`.
+
+The compact package also passed `zipalign -c -P 16 4`. Its SHA-256 is `f998a71d49e9e0eb4a8aa299959c7d51ebddd802044a637fc0b862abd78c0d64`.
+
+### Maintainer gates
+
+- Configure the production certificate and decide how to handle updates from the existing public build, which used development signing.
+- Run the compact APK on a physical ARM64 phone, including on 16 KB-page Android if available. The minified runtime smoke above exercised the universal APK on x86-64.
+- Confirm hosted CI on the first branch push or pull request, and verify redistribution terms and corresponding source for the shipped native and OCR components.
+- Exercise forced process death on a physical device. The local suite covers activity recreation and persisted Room history, and the minified install retained visible Queue and Vault entries.

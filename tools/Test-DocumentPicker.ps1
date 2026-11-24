@@ -1,4 +1,8 @@
-param([Parameter(Mandatory=$true)][string]$Serial)
+param(
+    [Parameter(Mandatory=$true)][string]$Serial,
+    [ValidateSet(0, 50, 100)][int]$CapKiB = 0,
+    [string]$Screenshots
+)
 $ErrorActionPreference = 'Stop'
 $sdk = [Environment]::GetEnvironmentVariable('ANDROID_HOME', 'User')
 $adb = Join-Path $sdk 'platform-tools/adb.exe'
@@ -28,6 +32,8 @@ function Find-Control($xpath, [switch]$Scroll) {
     $deadline = (Get-Date).AddSeconds(50)
     do {
         $doc = Screen
+        $systemWait = $doc.SelectSingleNode('//node[starts-with(@text,"System UI isn")]/../..//node[@text="Wait"]')
+        if ($systemWait) { Tap $systemWait; continue }
         $node = $doc.SelectSingleNode($xpath)
         if ($node) { return $node }
         $failure = $doc.SelectSingleNode('//node[contains(@text,"Could not import")]')
@@ -39,6 +45,14 @@ function Find-Control($xpath, [switch]$Scroll) {
         }
     } while ((Get-Date) -lt $deadline)
     throw "Control missing: $xpath"
+}
+
+function Capture($screenName) {
+    if (!$Screenshots) { return }
+    New-Item -ItemType Directory -Force -Path $Screenshots | Out-Null
+    $devicePath = '/data/local/tmp/morph-screen.png'
+    Device shell screencap -p $devicePath
+    Device pull $devicePath (Join-Path $Screenshots "$screenName.png")
 }
 
 Device push $fixture $remote
@@ -56,10 +70,35 @@ if (-not $doc.SelectSingleNode("//node[@text='$name']")) {
 Tap (Find-Control "//node[@resource-id='android:id/title' and @text='$name']")
 $null = Find-Control "//node[@package='com.morph.app' and @text='$name']" -Scroll
 "Picked $name from Android DocumentsUI and confirmed MORPH displayed it."
+Capture converter
+if ($CapKiB) {
+    Tap (Find-Control '(//node[@text="Exact size target"]/following::node[@checkable="true"])[1]' -Scroll)
+    $preset = if ($CapKiB -eq 50) {'Exam 50 KB'} else {'100 KB'}
+    Tap (Find-Control "//node[@text='$preset']" -Scroll)
+}
+$timer = [Diagnostics.Stopwatch]::StartNew()
 Tap (Find-Control '//node[@text="Convert & compress"]' -Scroll)
 $doc = Screen
 $permission = $doc.SelectSingleNode('//node[@resource-id="com.android.permissioncontroller:id/permission_allow_button"]')
 if ($permission) { Tap $permission }
 $null = Find-Control "//node[@text='$name']"
 $null = Find-Control "//node[@text='$name']/parent::node/descendant::node[starts-with(@text,'COMPLETE')]"
-"Conversion completed for $name."
+$timer.Stop()
+"Conversion completed for $name after $([math]::Round($timer.Elapsed.TotalSeconds,2)) seconds including UI polling."
+if ($CapKiB) {
+    $exports = Device shell ls -l /sdcard/Download/MORPH
+    $observed = $exports | Where-Object { $_ -match [regex]::Escape([IO.Path]::GetFileNameWithoutExtension($name)) } | Select-Object -First 1
+    if ($observed -notmatch '\s(\d+)\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s') { throw 'Missing exported fixture or its byte count.' }
+    $outputSize = [long]$Matches[1]
+    if ($outputSize -lt 1 -or $outputSize -gt $CapKiB * 1024) { throw "Output size exceeds the requested cap: $outputSize" }
+    "Output size: $outputSize bytes ($CapKiB KiB cap)."
+}
+if ($Screenshots) {
+    Capture queue
+    Tap (Find-Control '//node[@text="Vault"]')
+    $null = Find-Control "//node[@text='$name']" -Scroll
+    Capture vault
+    Tap (Find-Control '//node[@text="Inspect"]' -Scroll)
+    $null = Find-Control '//node[@text="Before / after"]'
+    Capture result
+}

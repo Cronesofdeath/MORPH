@@ -2,7 +2,7 @@
 -keep class org.openxmlformats.schemas.** { *; }
 -keep class org.apache.poi.schemas.** { *; }
 -keep class * implements org.apache.poi.ss.usermodel.WorkbookProvider { *; }
--keep class com.tom_roush.** { *; }
+-keep,allowoptimization class com.tom_roush.pdfbox.pdmodel.font.* { *; }
 -keep class com.arthenica.ffmpegkit.** { *; }
 -keep class com.fasterxml.aalto.** { *; }
 -keep class com.ctc.wstx.** { *; }
@@ -12,6 +12,10 @@
 -dontwarn javax.swing.**
 -dontwarn org.bouncycastle.**
 -keepattributes Signature,*Annotation*,InnerClasses,EnclosingMethod
+-assumenosideeffects class android.util.Log {
+    public static int d(...);
+    public static int v(...);
+}
 # Optional desktop tools, schema extensions, and codecs from the upstream libraries.
 -dontwarn aQute.bnd.annotation.baseline.BaselineIgnore
 -dontwarn aQute.bnd.annotation.spi.ServiceConsumer

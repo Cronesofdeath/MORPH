@@ -194,6 +194,42 @@ class DeviceStressTest {
         assertEquals("Cancelled", dao.job(id)?.status)
     }
 
+    @Test fun mislabeledCameraFixturePasses50KiBAndImpossibleJobCleansUp() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val source = File(dir, "messy-photo.png")
+        instrumentation.context.assets.open(source.name).use { input ->
+            source.outputStream().use { output -> input.copyTo(output) }
+        }
+        val sourceFormat = com.morph.app.domain.graph.ContentSniffer.detect(source,source.name)
+        assertEquals(JPG, sourceFormat.actual)
+        assertTrue(sourceFormat.mismatch)
+        val dao = (context.applicationContext as MorphApplication).database.dao()
+        val manager = WorkManager.getInstance(context)
+        suspend fun convert(budget: Long): ConversionJob {
+            val work = OneTimeWorkRequestBuilder<ConversionWorker>().build()
+            val id = work.id.toString()
+            dao.save(ConversionJob(id, Uri.fromFile(source).toString(), source.name, "PNG", "JPG",
+                source.length(), budget, false, "{}", "picker-fixture"))
+            manager.enqueue(work)
+            return withTimeout(90_000) {
+                while (withContext(Dispatchers.IO) {
+                    manager.getWorkInfoById(work.id).get(5, TimeUnit.SECONDS)?.state?.isFinished
+                } != true) delay(100)
+                assertFalse(File(context.cacheDir, "morph_work/$id").exists())
+                requireNotNull(dao.job(id))
+            }
+        }
+        val success = convert(50 * 1024)
+        assertEquals("Complete", success.status)
+        assertEquals("JPG", success.source)
+        assertTrue(success.bytes in 1..(50L * 1024))
+        assertTrue(File(success.output).isFile)
+        val impossible = convert(1)
+        assertEquals("Failed", impossible.status)
+        assertTrue(impossible.minimum > 1)
+        assertFalse(File(context.filesDir, "exports/${impossible.id}").exists())
+    }
+
     @Test fun unavailableAutosaveDestinationKeepsVerifiedVaultFile() = runBlocking {
         Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 29)
         val app = context.applicationContext as MorphApplication

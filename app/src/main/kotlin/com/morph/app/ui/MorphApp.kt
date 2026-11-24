@@ -68,6 +68,7 @@ import java.io.File
         fun message(text:String) { scope.launch { snack.showSnackbar(text) } }
         fun applyRecipe(r:Recipe) { destination=r.target; options=decodeOptions(r.options); exact=r.exact; enabled=r.budget>0; sizeValue=r.budget.toString(); unit="B"; changeTab("Convert") }
         LaunchedEffect(model) { model.events.collect { snack.showSnackbar(it) } }
+        LaunchedEffect(model) { model.sharedFileEvents.collect { changeTab("Convert") } }
         Scaffold(containerColor=colors.background,snackbarHost={SnackbarHost(snack)},bottomBar={
             NavigationBar(containerColor=colors.surface) { tabs.forEachIndexed { i,name ->
                 NavigationBarItem(route==name,{changeTab(name)},modifier=Modifier.testTag("tab-$name"),icon={Icon(icons[i],name)},label={Text(name)})

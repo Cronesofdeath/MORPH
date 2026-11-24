@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.app)
     alias(libs.plugins.compose)
@@ -6,6 +8,22 @@ plugins {
 }
 
 val compactArm64 = providers.gradleProperty("compactArm64").map(String::toBoolean).orElse(false)
+val inspectR8 = providers.gradleProperty("inspectR8").map(String::toBoolean).orElse(false)
+val allowDevSign = providers.gradleProperty("allowDevSign").map { it == "true" }.orElse(false)
+val localSigning = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+fun releaseCredential(name: String): String? =
+    providers.environmentVariable(name).orNull?.takeUnless { it.isBlank() }
+        ?: localSigning.getProperty(name)?.takeUnless { it.isBlank() }
+
+val storePath = releaseCredential("MORPH_KEYSTORE_PATH")
+val storePass = releaseCredential("MORPH_KEYSTORE_PASSWORD")
+val releaseAlias = releaseCredential("MORPH_KEY_ALIAS")
+val releaseKeyPass = releaseCredential("MORPH_KEY_PASSWORD")
+val releaseStore = storePath?.let(rootProject::file)
+val productionSigningReady = releaseStore?.isFile == true &&
+    listOf(storePass, releaseAlias, releaseKeyPass).all { it != null }
 if (compactArm64.get()) {
     layout.buildDirectory.set(layout.projectDirectory.dir("build/compact-arm64"))
 }
@@ -17,8 +35,8 @@ android {
         applicationId = "com.morph.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.0.3-rc2"
+        versionCode = 6
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
@@ -26,15 +44,32 @@ android {
         }
     }
     buildFeatures { compose = true }
+    sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("APKs/Test files"))
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    signingConfigs {
+        if (productionSigningReady) create("production") {
+            storeFile = releaseStore
+            storePassword = storePass
+            keyAlias = releaseAlias
+            keyPassword = releaseKeyPass
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (compactArm64.get()) signingConfig = signingConfigs.getByName("debug")
+            if (inspectR8.get()) {
+                proguardFiles("r8-inspection.pro")
+            }
+            signingConfig = when {
+                productionSigningReady -> signingConfigs.getByName("production")
+                allowDevSign.get() -> signingConfigs.getByName("debug")
+                else -> null
+            }
         }
     }
     packaging {
@@ -55,6 +90,17 @@ android {
             )
         }
     }
+}
+
+val requireReleaseSigning = tasks.register("requireReleaseSigning") {
+    doLast {
+        check(productionSigningReady || allowDevSign.get()) {
+            "Release signing is required. Set the four MORPH signing values in the environment or keystore.properties. Use -PallowDevSign=true only for development or CI."
+        }
+    }
+}
+tasks.configureEach {
+    if (name == "preReleaseBuild") dependsOn(requireReleaseSigning)
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

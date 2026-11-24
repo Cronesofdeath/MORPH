@@ -6,3 +6,6 @@
 /APKs/*.apk
 /APKs/Test reports/
 *.iml
+*.jks
+*.keystore
+keystore.properties

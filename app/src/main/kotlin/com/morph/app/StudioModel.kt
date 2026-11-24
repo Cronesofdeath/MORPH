@@ -3,10 +3,11 @@ package com.morph.app
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import android.graphics.BitmapFactory
+import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.work.*
 import com.morph.app.data.*
@@ -15,22 +16,57 @@ import com.morph.app.domain.model.*
 import com.morph.app.engine.transfer
 import com.morph.app.worker.ConversionWorker
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
-class StudioModel(private val app:Application):AndroidViewModel(app) {
+class StudioModel(private val app:Application, savedState:SavedStateHandle):AndroidViewModel(app) {
     val dao=(app as MorphApplication).database.dao()
     val studioOptions = androidx.compose.runtime.mutableStateOf(ProOptions())
-    val files=MutableStateFlow<List<Selection>>(emptyList())
+    val files=MutableStateFlow(restoreSelections(savedState.get<Bundle>("selection")))
+    private val sharedFiles = Channel<Unit>(Channel.CONFLATED)
+    val sharedFileEvents = sharedFiles.receiveAsFlow()
+    fun openSharedFiles() { sharedFiles.trySend(Unit) }
+    private val submissionSlot = Mutex()
     val importing=MutableStateFlow(false)
     val events=MutableSharedFlow<String>(extraBufferCapacity=8)
     val jobs=dao.jobs().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val recipes=dao.recipes().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     private val resolver=app.contentResolver
     private val importSlot = Mutex()
+    init {
+        savedState.setSavedStateProvider("selection") {
+            val snapshot = Bundle()
+            var remaining = 64_000
+            for (item in files.value) {
+                remaining -= item.uri.length + item.name.length + item.detail.length + 256
+                if (remaining < 0) break
+                snapshot.putBundle(snapshot.size().toString(), Bundle().apply {
+                    putString("uri",item.uri)
+                    putString("name",item.name)
+                    putLong("size",item.size)
+                    putString("format",item.format.name)
+                    putBoolean("mismatch",item.mismatch)
+                    putString("detail",item.detail)
+                    putBoolean("animated",item.animated)
+                    putBoolean("multiPage",item.multiPage)
+                })
+            }
+            snapshot
+        }
+    }
+
+    private fun restoreSelections(snapshot: Bundle?): List<Selection> =
+        (0 until (snapshot?.size() ?: 0)).mapNotNull { index ->
+            val item = snapshot?.getBundle(index.toString()) ?: return@mapNotNull null
+            val uri = item.getString("uri") ?: return@mapNotNull null
+            val format = Format.entries.find { it.name == item.getString("format") } ?: return@mapNotNull null
+            Selection(uri,item.getString("name").orEmpty(),item.getLong("size"),format,item.getBoolean("mismatch"),
+                item.getString("detail").orEmpty(),item.getBoolean("animated"),item.getBoolean("multiPage"))
+        }
     private suspend fun inspect(uri:Uri, persist:Boolean):Selection {
         require(uri.scheme=="content") { "Select a file from a document provider" }
         var name="input.bin"; var bytes=0L
@@ -47,7 +83,11 @@ class StudioModel(private val app:Application):AndroidViewModel(app) {
         val stored=if(retained) uri else {
             val dir=File(app.filesDir,"imports/${UUID.randomUUID()}").apply { mkdirs() }
             val f=File(dir,StorageManager.safe(name))
-            try { resolver.openInputStream(uri)!!.use { stream -> f.outputStream().use { stream.transfer(it) } }; bytes=f.length(); Uri.fromFile(f) }
+            try {
+                val source = resolver.openInputStream(uri) ?: error("This provider could not open the file.")
+                bytes = source.use { stream -> f.outputStream().use { stream.transfer(it,dir.usableSpace) } }
+                return describe(Uri.fromFile(f), name, bytes)
+            }
             catch(e:Throwable) { dir.deleteRecursively(); throw e }
         }
         return describe(stored,name,bytes)
@@ -116,6 +156,14 @@ class StudioModel(private val app:Application):AndroidViewModel(app) {
         val f=File(dir,"Clipboard.txt"); f.writeText(text); listOf(describe(Uri.fromFile(f),f.name,f.length()))
     }
     suspend fun enqueue(target:Format,budget:Long,exact:Boolean,opt:ProOptions,shared:Boolean,combine:Boolean=false) {
+        if (!submissionSlot.tryLock()) return
+        try {
+            enqueueSelection(target,budget,exact,opt,shared,combine)
+        } finally {
+            submissionSlot.unlock()
+        }
+    }
+    private suspend fun enqueueSelection(target:Format,budget:Long,exact:Boolean,opt:ProOptions,shared:Boolean,combine:Boolean) {
         val items=files.value; require(items.isNotEmpty())
         val budgets=if(shared && budget>0) SizeUnitCalculator.allocate(budget,items.map { it.size }) else List(items.size) { budget }
         val batch=UUID.randomUUID().toString()
