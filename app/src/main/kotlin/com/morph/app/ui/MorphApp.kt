@@ -21,6 +21,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.datastore.preferences.core.*
 import androidx.navigation.compose.*
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.ui.draw.clipToBounds
 import com.morph.app.*
 import com.morph.app.data.*
 import com.morph.app.domain.graph.*
@@ -36,8 +40,8 @@ import java.io.File
     val dynamic=prefs[booleanPreferencesKey("dynamic")] ?: false
     val colors=when {
         dynamic && Build.VERSION.SDK_INT>=31 -> if(dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> darkColorScheme(primary=Color(0xff91b0ff),surface=Color(0xff16191e),background=Color(0xff0b0d10),outlineVariant=Color(0xff343a44))
-        else -> lightColorScheme(primary=Blue,background=Color(0xfff8f9fa),surface=Color.White,outlineVariant=Color(0xffd9dfe6))
+        dark -> darkColorScheme(primary=Color(0xff72a4ff),primaryContainer=Color(0xff172554),secondary=Color(0xff93c5fd),secondaryContainer=Color(0xff1e3a5f),onSecondaryContainer=Color(0xffdbeafe),tertiary=Color(0xff34d399),surface=Color(0xff16191e),background=Color(0xff0b0d10),outlineVariant=Color(0xff343a44))
+        else -> lightColorScheme(primary=Color(0xff2563eb),primaryContainer=Color(0xffdbeafe),secondary=Color(0xff25549a),secondaryContainer=Color(0xffdbeafe),onSecondaryContainer=Color(0xff172554),tertiary=Color(0xff047857),background=Color(0xfff8f9fa),surface=Color.White,outlineVariant=Color(0xffd9dfe6))
     }.let { if(mode=="OLED") it.copy(background=Color.Black,surface=Color.Black) else it }
     MaterialTheme(colorScheme=colors) {
         val scope=rememberCoroutineScope(); val nav=rememberNavController()
@@ -54,22 +58,23 @@ import java.io.File
                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm)
             };observed=complete
         }
-        var options by remember { mutableStateOf(ProOptions()) }
+        var options by model.studioOptions
         var destination by rememberSaveable { mutableStateOf("") }
         var sizeValue by rememberSaveable { mutableStateOf("100") }; var unit by rememberSaveable { mutableStateOf("KB") }
         var enabled by rememberSaveable { mutableStateOf(false) }; var exact by rememberSaveable { mutableStateOf(false) }
         var shared by rememberSaveable { mutableStateOf(false) }; var combine by rememberSaveable { mutableStateOf(false) }
         val binary=prefs[booleanPreferencesKey("binary")] ?: true
-        fun changeTab(name:String) { nav.navigate(name) { popUpTo("Convert") { saveState=true }; launchSingleTop=true; restoreState=true } }
+        fun changeTab(name:String) { nav.navigate(name) { popUpTo(nav.graph.findStartDestination().id) { saveState=true }; launchSingleTop=true; restoreState=true } }
         fun message(text:String) { scope.launch { snack.showSnackbar(text) } }
         fun applyRecipe(r:Recipe) { destination=r.target; options=decodeOptions(r.options); exact=r.exact; enabled=r.budget>0; sizeValue=r.budget.toString(); unit="B"; changeTab("Convert") }
         LaunchedEffect(model) { model.events.collect { snack.showSnackbar(it) } }
         Scaffold(containerColor=colors.background,snackbarHost={SnackbarHost(snack)},bottomBar={
             NavigationBar(containerColor=colors.surface) { tabs.forEachIndexed { i,name ->
-                NavigationBarItem(route==name,{changeTab(name)},icon={Icon(icons[i],name)},label={Text(name)})
+                NavigationBarItem(route==name,{changeTab(name)},modifier=Modifier.testTag("tab-$name"),icon={Icon(icons[i],name)},label={Text(name)})
             } }
         }) { inset ->
-            NavHost(nav,"Convert",Modifier.fillMaxSize().padding(inset)) {
+            Surface(Modifier.fillMaxSize().padding(inset).consumeWindowInsets(inset).clipToBounds(),color=colors.background) {
+            NavHost(nav,"Convert",Modifier.fillMaxSize(),enterTransition={EnterTransition.None},exitTransition={ExitTransition.None},popEnterTransition={EnterTransition.None},popExitTransition={ExitTransition.None}) {
                 composable("Convert") {
                     val router=remember { ConversionGraphRouter() }
                     val targets=remember(files) {
@@ -115,22 +120,32 @@ import java.io.File
                             }
                         }
                         Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                            OutlinedButton({folder.launch(null)}) { Text("Import folder") }
+                            OutlinedButton({folder.launch(null)},Modifier.weight(1f)) { Icon(Icons.Outlined.FolderOpen,null); Spacer(Modifier.width(6.dp)); Text("Import folder") }
                             OutlinedButton({
                                 val clip=context.getSystemService(android.content.ClipboardManager::class.java).primaryClip?.takeIf { it.itemCount>0 }?.getItemAt(0)
                                 when { clip?.uri!=null -> model.pick(listOf(clip.uri),false); !clip?.text.isNullOrBlank() -> model.paste(clip.text.toString()); else -> message("Clipboard is empty") }
-                            }) { Text("Paste") }
+                            },Modifier.weight(1f)) { Icon(Icons.Outlined.ContentPaste,null); Spacer(Modifier.width(6.dp)); Text("Paste") }
                         }
                         if(files.isNotEmpty()) Panel {
                             Label("Source · ${files.size} selected")
                             files.forEach { item -> Row(verticalAlignment=Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) { Text(item.name,fontWeight=FontWeight.SemiBold)
                                     Text(listOf(item.format.label,bytes(item.size,binary),"${item.size} B",item.detail).filter(String::isNotEmpty).joinToString(" · "),style=mono)
-                                    if(item.mismatch) Text("Mismatched extension",color=Color(0xffaa6900),style=mono)
+                                    if(item.mismatch) Text("Detected ${item.format.label} • routing from the file contents.",color=Color(0xffaa6900),style=mono)
                                 }
                                 if(files.size>1 && item!=files.first()) IconButton({ val reordered=files.toMutableList(); val at=reordered.indexOf(item); java.util.Collections.swap(reordered,at,at-1); model.files.value=reordered }) {Icon(Icons.Outlined.ArrowUpward,"Move earlier")}
                                 IconButton({model.files.value=files-item}) { Icon(Icons.Outlined.Close,"Remove ${item.name}") }
                             } }
+                        }
+                        files.singleOrNull()?.takeIf { it.mismatch && !enabled && options.permitsCorrection() }?.let { item ->
+                            Panel {
+                                Label("Lossless Format Correction")
+                                Text("Save a byte-identical .${item.format.extension} copy. Original metadata is preserved and both SHA-256 hashes are checked.")
+                                Button({ scope.launch {
+                                    model.enqueue(item.format,0,false,options,false)
+                                    changeTab("Queue")
+                                } }) { Text("Save corrected copy") }
+                            }
                         }
                         Panel {
                             Label("Output format")
@@ -139,6 +154,13 @@ import java.io.File
                                 OutlinedButton({showFormats=true},Modifier.fillMaxWidth()) { Text("${selected.label}  ·  Change format") }
                                 val path=router.route(files.first().format,selected).orEmpty()
                                 PipelineFlowCanvas(listOf(files.first().format.label)+path.map { it.to.label })
+                                val warnings = (files.flatMap { ConversionLossAnalyzer.advisories(it.format, selected,it.animated,it.multiPage) } + if(enabled && selected==Format.PDF) listOf("A tight PDF budget can rasterize pages and remove selectable text.") else emptyList()).distinct()
+                                if (warnings.isNotEmpty()) Surface(color=Color(0xffffedc2),contentColor=Color(0xff553600),shape=RoundedCornerShape(14.dp)) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        Text("Before converting",fontWeight=FontWeight.Bold)
+                                        warnings.forEach { Text(it) }
+                                    }
+                                }
                                 if(canCombine) Toggle("Combine into one file",combine) {combine=it}
                             }
                         }
@@ -166,10 +188,18 @@ import java.io.File
                                     TextButton({sizeValue=floor.toString();unit="B"}) {Text("Use header allowance")}
                                 }
                                 if(selected in FormatRegistry.exact) Toggle("Exact-byte lock",exact) {exact=it}
+                                else if(selected!=null) Text("Exact-byte padding is unavailable for ${selected.label}. The maximum size still applies.",style=mono)
                             } }
                         }
                         Panel {
-                            TextButton({lab=!lab}) { Text(if(lab) "Close Pro Lab" else "Open Pro Lab") }
+                            Row(Modifier.fillMaxWidth().clickable { lab=!lab }.padding(vertical=8.dp),verticalAlignment=Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Tune,null)
+                                Column(Modifier.weight(1f).padding(horizontal=12.dp)) {
+                                    Text(if(lab) "Close Pro Lab" else "Open Pro Lab",fontWeight=FontWeight.SemiBold)
+                                    Text(if(options==ProOptions()) "Default studio settings" else "Custom overrides active",style=mono)
+                                }
+                                Icon(if(lab) Icons.Outlined.ExpandLess else Icons.Outlined.ChevronRight,null)
+                            }
                             if(lab) {
                                 ProControls(selected, files.any { it.format in setOf(Format.ZIP, Format.SEVEN) }, options) { options=it }
                                 OutlinedTextField(recipeName,{recipeName=it},label={Text("Recipe name")},singleLine=true)
@@ -187,9 +217,10 @@ import java.io.File
                     }
                     if(showFormats) FormatPickerSheet(targets,{selectedFormat->destination=selectedFormat.name; showFormats=false},{showFormats=false})
                 }
-                composable("Queue") { JobsPage(jobs,model,binary,::message) }
+                composable("Queue") { JobsPage({changeTab("Convert")},jobs,model,binary,::message) }
                 composable("Vault") { Vault(jobs,recipes,model,binary,::applyRecipe,::message) }
                 composable("Settings") { Settings(mode,dynamic,binary) }
+            }
             }
         }
     }
@@ -201,7 +232,7 @@ import java.io.File
             Spacer(Modifier.width(7.dp)); Text("MORPH",style=mono.copy(fontWeight=FontWeight.Bold,letterSpacing=2.sp))
         }
         Column { Text(title,fontSize=38.sp,fontWeight=FontWeight.Bold,letterSpacing=(-1.8).sp); Text(subtitle,color=MaterialTheme.colorScheme.onSurfaceVariant) }
-        content(); Spacer(Modifier.height(4.dp))
+        content(); Spacer(Modifier.height(24.dp))
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
@@ -224,6 +255,7 @@ import java.io.File
 @Composable fun ProControls(fmt:Format?, hasArchiveInput:Boolean, opt:ProOptions,set:(ProOptions)->Unit) {
     @Composable fun field(title:String,value:String,change:(String)->Unit) { OutlinedTextField(value,change,label={Text(title)},singleLine=true,modifier=Modifier.fillMaxWidth()) }
     field("Filename template",opt.filename) {set(opt.copy(filename=it))}
+    if(fmt in listOf(Format.JSON,Format.XML,Format.TXT,Format.SQL)) field("Worksheet name (for workbook input)",opt.sheet) {set(opt.copy(sheet=it))}
     if (hasArchiveInput) {
         OutlinedTextField(opt.inputPassword, { set(opt.copy(inputPassword = it)) }, label = { Text("Input archive password") },
             singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())

@@ -40,6 +40,13 @@ object FileInspector {
             else -> ""
         }
     }.getOrDefault("")
+    suspend fun correctedCopy(input: File, destination: File): File {
+        input.inputStream().use { source -> destination.outputStream().use { source.transfer(it) } }
+        check(hash(input.inputStream()) == hash(destination.inputStream())) {
+            "The copy did not match the original. Try exporting again."
+        }
+        return destination
+    }
     suspend fun hash(source:InputStream):String {
         val digest=MessageDigest.getInstance("SHA-256")
         java.security.DigestInputStream(source,digest).use {it.transfer(object:java.io.OutputStream(){override fun write(b:Int){};override fun write(b:ByteArray,off:Int,len:Int){} })}

@@ -65,13 +65,23 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
                     val stream = ctx.contentResolver.openInputStream(Uri.parse(job.uri)) ?: error("Input file is unavailable")
                     stream.use { source -> input.outputStream().use { source.transfer(it, folder.usableSpace) } }
                 }
-                val detected = if (combined) Format.valueOf(job.source) else MagicByteDetector.detect(input, job.name).actual
+                val identity = if (combined) null else MagicByteDetector.detect(input, job.name)
+                val detected = identity?.actual ?: Format.valueOf(job.source)
+                require(identity?.isEncrypted != true || (identity.mismatch && detected == target && job.budget == 0L && options.permitsCorrection())) { "This document is encrypted. Export an unlocked copy first." }
                 val outputDir = File(folder, "stages").apply { mkdirs() }
                 val size = job.budget.takeIf { it > 0 }?.let { SizeTarget(it, job.exact) }
                 val result = if (combined) {
                     BatchEngine.combine(ctx, org.json.JSONArray(job.uri.removePrefix("batch:")), outputDir, target, options, size, ::step)
+                } else if (identity?.mismatch == true && detected == target && size == null && options.permitsCorrection()) {
+                    step("Verifying lossless format correction")
+                    val corrected = File(outputDir, "corrected.${target.extension}")
+                    FileInspector.correctedCopy(input,corrected)
                 } else {
                     TargetSizeOrchestrator.convert(input, outputDir, detected, target, options, size, ::step)
+                }
+                if (result.name != "corrected.${target.extension}") {
+                    step("Validating output")
+                    SemanticOutputValidator.verify(result, target, options, if (combined) null else input, detected)
                 }
                 result to detected
             }
@@ -114,7 +124,7 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
             throw e
         } catch(e:Exception) {
             if (published) Result.success() else {
-                dao.updateActive(job.id, "Failed", e.message?.take(512) ?: "Conversion failed", (e as? TargetTooSmall)?.minimum ?: 0)
+                dao.updateActive(job.id, "Failed", MorphError.explain(e), (e as? TargetTooSmall)?.minimum ?: 0)
                 Result.failure()
             }
         } finally {

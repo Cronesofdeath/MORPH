@@ -3,8 +3,6 @@ package com.morph.app.engine
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
 import android.os.Build
-import android.util.Base64
-import android.util.Base64OutputStream
 import com.caverock.androidsvg.SVG as AndroidSvg
 import com.morph.app.domain.model.*
 import com.morph.app.domain.model.Format.*
@@ -36,6 +34,7 @@ object ImageEngine {
             ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
                 val (width, height) = fit(info.size.width, info.size.height)
                 decoder.setTargetSize(width, height)
+                decoder.setTargetColorSpace(ColorSpace.get(ColorSpace.Named.SRGB))
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
         }.getOrNull() else null
@@ -43,16 +42,16 @@ object ImageEngine {
         val meta = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.path,meta)
         if (meta.outWidth > 0 && meta.outHeight > 0) {
-            val orientation = if (format == JPG) runCatching {
+            val orientation = runCatching {
                 androidx.exifinterface.media.ExifInterface(file).getAttributeInt("Orientation", 1)
-            }.getOrDefault(1) else 1
+            }.getOrDefault(1)
             val swapAxes = orientation in 5..8
             val width = if (swapAxes) meta.outHeight else meta.outWidth
             val height = if (swapAxes) meta.outWidth else meta.outHeight
             val (fitWidth, fitHeight) = fit(width, height)
             var sample = 1
             while (width / (sample * 2L) >= fitWidth && height / (sample * 2L) >= fitHeight) sample *= 2
-            val raw = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            val raw = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB) })
             if (raw != null) {
                 val transform = Matrix().apply {
                     when (orientation) {
@@ -82,18 +81,6 @@ object ImageEngine {
     suspend fun convert(src: File, dst: File, from: Format, to: Format, opt: ProOptions, limit: Long?, step: suspend (String)->Unit) {
         var image = bitmap(src,from,opt)
         try {
-            if (to == SVG) {
-                val png = File.createTempFile("embed",".png",dst.parentFile)
-                try {
-                    png.outputStream().use { image.compress(Bitmap.CompressFormat.PNG,100,it) }
-                    dst.outputStream().use { out ->
-                        out.write("""<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${image.width}" height="${image.height}"><image width="100%" height="100%" xlink:href="data:image/png;base64,""".toByteArray())
-                        Base64OutputStream(out, Base64.NO_WRAP or Base64.NO_CLOSE).use { enc -> png.inputStream().use { it.copyTo(enc,65536) } }
-                        out.write("\"/></svg>".toByteArray())
-                    }
-                } finally { png.delete() }
-                return
-            }
             if (to == HEIC) {
                 if (Build.VERSION.SDK_INT < 28) error("HEIC encoding requires Android 9 or later")
                 suspend fun heif(q:Int): Long {

@@ -17,8 +17,8 @@ android {
         applicationId = "com.morph.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 5
+        versionName = "1.0.3-rc2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
@@ -80,6 +80,8 @@ dependencies {
     implementation(libs.poi.core)
     implementation(libs.poi.ooxml)
     implementation(libs.poi.scratch)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-devanagari:16.0.1")
     implementation(libs.pdf)
     implementation(libs.svg)
     implementation(libs.exif)
@@ -97,6 +99,7 @@ dependencies {
     implementation(libs.aalto)
     implementation(libs.stax)
     testImplementation(libs.junit)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.0")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

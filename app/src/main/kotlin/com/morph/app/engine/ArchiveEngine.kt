@@ -49,24 +49,26 @@ object ArchiveEngine {
         var remaining = minOf(folder.usableSpace / 2, 8L shl 30)
         suspend fun extract(name: String, stream: InputStream) {
             require(result.size < 10000) { "Archive has too many entries" }
-            val path = name.replace('\\','/').removePrefix("./")
+            val directory = name.endsWith("/")
+            val path = name.removeSuffix("/").replace('\\','/').removePrefix("./")
             require(path.isNotEmpty() && !path.startsWith("/") && path.split('/').none { it in listOf("..",".","") || ':' in it }) { "Invalid archive path" }
             require(names.add(path)) { "Duplicate archive entry" }
             val file = File(folder,"entry-${result.size}")
+            require(file.canonicalFile.parentFile == folder.canonicalFile) { "Invalid extraction location" }
             val count = file.outputStream().buffered().use { stream.transfer(it,remaining) }
             remaining -= count
-            result += path to file
+            result += (if(directory) "$path/" else path) to file
         }
         when(format) {
             ZIP,EPUB,DOCX,XLSX,PPTX,ODT,ODS -> net.lingala.zip4j.ZipFile(src,opts.inputPassword.toCharArray()).use { zip ->
-                zip.fileHeaders.filterNot { it.isDirectory }.forEach { e -> zip.getInputStream(e).use { extract(e.fileName,it) } }
+                zip.fileHeaders.forEach { e -> if (e.isDirectory) extract(e.fileName.trimEnd('/')+"/", ByteArrayInputStream(byteArrayOf())) else zip.getInputStream(e).use { extract(e.fileName,it) } }
             }
             SEVEN -> SevenZFile.builder().setFile(src).setMaxMemoryLimitKiB(65_536)
                 .apply { if (opts.inputPassword.isNotEmpty()) setPassword(opts.inputPassword.toCharArray()) }
                 .get().use { archive ->
                 var e = archive.nextEntry
                 while (e != null) {
-                    if (!e.isDirectory) archive.getInputStream(e).use { extract(e.name,it) }
+                    if (e.isDirectory) extract(e.name.trimEnd('/')+"/",ByteArrayInputStream(byteArrayOf())) else archive.getInputStream(e).use { extract(e.name,it) }
                     e = archive.nextEntry
                 }
             }
@@ -74,7 +76,7 @@ object ArchiveEngine {
             else -> src.inputStream().buffered().use { raw -> TarArchiveInputStream(decompress(format,raw)).use { tar ->
                 var e = tar.nextEntry
                 while (e != null) {
-                    if (e.isFile) extract(e.name,tar)
+                    if(e.isDirectory) extract(e.name.trimEnd('/')+"/",ByteArrayInputStream(byteArrayOf())) else if (e.isFile) extract(e.name,tar) else error("This TAR contains a link or special entry that cannot be preserved.")
                     e = tar.nextEntry
                 }
             } }
@@ -109,7 +111,7 @@ object ArchiveEngine {
             SEVEN -> SevenZOutputFile(dst).use { archive ->
                 files.forEach { (name,file) ->
                     currentCoroutineContext().ensureActive()
-                    archive.putArchiveEntry(archive.createArchiveEntry(file,name))
+                    archive.putArchiveEntry(archive.createArchiveEntry(file,name).apply { isDirectory=name.endsWith("/") })
                     file.inputStream().use { input -> input.transfer(object: OutputStream() {
                         override fun write(b: Int) = archive.write(b)
                         override fun write(b: ByteArray, off: Int, len: Int) = archive.write(b,off,len)
@@ -118,7 +120,7 @@ object ArchiveEngine {
                 }
             }
             in FormatRegistry.singleStreams -> {
-                require(files.size == 1) { "This format holds one file. Select a TAR container for several files." }
+                require(files.size == 1 && !files.single().first.endsWith("/")) { "This format holds one file. Select a TAR container for several files." }
                 compress(fmt,dst.outputStream().buffered()).use { out -> files.single().second.inputStream().use { it.transfer(out) } }
             }
             else -> TarArchiveOutputStream(compress(fmt,dst.outputStream().buffered())).use { tar ->

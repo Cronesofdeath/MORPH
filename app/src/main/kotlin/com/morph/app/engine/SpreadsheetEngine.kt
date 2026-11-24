@@ -4,6 +4,7 @@ import com.morph.app.domain.model.*
 import com.morph.app.domain.model.Format.*
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.csv.*
+import com.morph.app.domain.graph.ContentText
 import java.io.File
 import java.util.zip.ZipFile
 import org.apache.poi.ss.usermodel.*
@@ -18,10 +19,15 @@ object SpreadsheetEngine {
     fun escape(text: String) = org.jsoup.nodes.Entities.escape(text)
     fun tables(src: File, fmt: Format, opt: ProOptions): List<Table> {
         require(src.length() <= 32L shl 20) { "Workbook exceeds the in-memory editing limit" }
+        if (fmt == HTML || fmt == SPREADSHEETML) return PortalTables.read(src, fmt).filter { opt.sheet.isBlank() || it.name==opt.sheet }
         if (fmt == CSV || fmt == TSV) {
             val csv = CsvMapper().enable(CsvParser.Feature.WRAP_AS_ARRAY)
-            val schema = CsvSchema.emptySchema().withColumnSeparator(if(fmt==TSV) '\t' else opt.delimiter)
-            val rows = csv.readerFor(Array<String>::class.java).with(schema).readValues<Array<String>>(src).use { it.readAll().map(Array<String>::toList) }
+            val schema = CsvSchema.emptySchema().withColumnSeparator(if(fmt==TSV) '\t' else ContentText.reader(src).use { reader ->
+                val sample = CharArray(65536)
+                val n = reader.read(sample)
+                ContentText.delimiter(String(sample, 0, n.coerceAtLeast(0))) ?: opt.delimiter
+            })
+            val rows = ContentText.reader(src).use { reader -> csv.readerFor(Array<String>::class.java).with(schema).readValues<Array<String>>(reader).use { it.readAll().map(Array<String>::toList) } }
             return listOf(Table("Sheet1",rows))
         }
         if (fmt == ODS) return ZipFile(src).use { zip ->
@@ -57,14 +63,95 @@ object SpreadsheetEngine {
                     Table(sheet.attr("table:name"), rows)
                 }
         }
+        guardWorkbook(src)
         return WorkbookFactory.create(src,null,true).use { book ->
-            val formatter = DataFormatter()
+            val formatter = DataFormatter().apply { setUseCachedValuesForFormulaCells(true) }
+            val evaluator = book.creationHelper.createFormulaEvaluator()
             book.filter { opt.sheet.isBlank() || it.sheetName == opt.sheet }.map { sheet ->
-                Table(sheet.sheetName,sheet.map { row -> (0 until row.lastCellNum.toInt()).map { formatter.formatCellValue(row.getCell(it)) } })
+                Table(sheet.sheetName,sheet.map { row -> (0 until row.lastCellNum.toInt()).map { val cell = row.getCell(it); runCatching { formatter.formatCellValue(cell,evaluator) }.getOrElse { formatter.formatCellValue(cell) } } })
             }
         }
     }
+    private fun guardWorkbook(src: File) {
+        require(src.length() <= 32L shl 20) { "Workbook exceeds the editing memory limit." }
+        if (src.inputStream().use { it.read() } == 0x50) ZipFile(src).use { zip ->
+            var bytes = 0L
+            for (entry in zip.entries()) {
+                require(entry.size >= 0 && entry.size <= (32L shl 20) - bytes) { "Expanded workbook exceeds the editing memory limit." }
+                bytes += entry.size
+            }
+        }
+    }
+    fun html(src: File, dst: File, opt: ProOptions) {
+        guardWorkbook(src)
+        WorkbookFactory.create(src,null,true).use { book ->
+            val formatter=DataFormatter().apply { setUseCachedValuesForFormulaCells(true) }
+            val evaluator=book.creationHelper.createFormulaEvaluator()
+            val sheets=book.filter { opt.sheet.isBlank() || it.sheetName == opt.sheet }
+            require(sheets.isNotEmpty()) { "No matching worksheet." }
+            fun cssColor(color: org.apache.poi.ss.usermodel.Color?): String? {
+                val rgb=when(color) {
+                    is org.apache.poi.xssf.usermodel.XSSFColor -> color.rgb
+                    is org.apache.poi.hssf.util.HSSFColor -> color.triplet.map { it.toByte() }.toByteArray()
+                    else -> null
+                }
+                return rgb?.joinToString("",prefix="#") { "%02x".format(it) }
+            }
+            dst.bufferedWriter().use { w ->
+                w.append("<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><style>section{overflow:auto}table{border-collapse:collapse}td{white-space:pre-wrap;padding:.25em}</style></head><body>")
+                for (sheet in sheets) {
+                    w.append("<section><h2>${escape(sheet.sheetName)}</h2><table><colgroup>")
+                    val merges=sheet.mergedRegions
+                    val columns=maxOf(sheet.maxOfOrNull { it.lastCellNum.toInt() } ?: 0,(merges.maxOfOrNull { it.lastColumn } ?: -1)+1)
+                    val end=maxOf(sheet.lastRowNum,merges.maxOfOrNull { it.lastRow } ?: 0)
+                    require((end+1L)*columns<=500000 && merges.size<=4096) { "The worksheet is too large for HTML export." }
+                    repeat(columns) { w.append("<col style='width:${sheet.getColumnWidth(it)/256.0}ch'>") }
+                    w.append("</colgroup>")
+                    for (r in 0..end) {
+                        val spans=merges.filter { r in it.firstRow..it.lastRow }.sortedBy { it.firstColumn }
+                        val row=sheet.getRow(r)
+                        var spanIndex=0
+                        w.append("<tr>")
+                        for(c in 0 until columns) {
+                            while(spanIndex<spans.size && spans[spanIndex].lastColumn<c) spanIndex++
+                            val span=spans.getOrNull(spanIndex)?.takeIf { c>=it.firstColumn }
+                            if(span!=null && (r!=span.firstRow || c!=span.firstColumn)) continue
+                            val cell=row?.getCell(c)
+                            w.append("<td")
+                            if(span!=null) w.append(" rowspan='${span.lastRow-r+1}' colspan='${span.lastColumn-c+1}'")
+                            if(cell!=null) {
+                                val s=cell.cellStyle
+                                val font=book.getFontAt(s.fontIndex)
+                                w.append(" style='")
+                                if(font.bold) w.append("font-weight:bold;")
+                                if(font.italic) w.append("font-style:italic;")
+                                if(s.alignment in setOf(HorizontalAlignment.LEFT,HorizontalAlignment.CENTER,HorizontalAlignment.RIGHT)) w.append("text-align:${s.alignment.name.lowercase()};")
+                                if(s.fillPattern!=FillPatternType.NO_FILL) cssColor(s.fillForegroundColorColor)?.let { w.append("background-color:$it;") }
+                                val color=when(font) {
+                                    is org.apache.poi.xssf.usermodel.XSSFFont -> font.xssfColor
+                                    is org.apache.poi.hssf.usermodel.HSSFFont -> (book as HSSFWorkbook).customPalette.getColor(font.color)
+                                    else -> null
+                                }
+                                cssColor(color)?.let { w.append("color:$it;") }
+                                listOf("top" to s.borderTop,"bottom" to s.borderBottom,"left" to s.borderLeft,"right" to s.borderRight).forEach { (side,border) ->
+                                    if (border!=BorderStyle.NONE) w.append("border-$side:1px solid;")
+                                }
+                                w.append("'")
+                            }
+                            val value=runCatching { formatter.formatCellValue(cell,evaluator) }.getOrElse { formatter.formatCellValue(cell) }
+                            w.append(">${escape(value)}</td>")
+                        }
+                        w.append("</tr>")
+                    }
+                    w.append("</table></section>")
+                }
+                w.append("</body></html>")
+            }
+        }
+    }
+
     fun migrate(src: File,dst: File,to: Format,opt: ProOptions) {
+        guardWorkbook(src)
         WorkbookFactory.create(src,null,true).use { old -> (if(to == XLS) HSSFWorkbook() else XSSFWorkbook() as Workbook).use { new ->
             val styles = mutableMapOf<Short,CellStyle>()
             val selected=old.filter { opt.sheet.isBlank() || it.sheetName == opt.sheet }
@@ -119,13 +206,24 @@ object SpreadsheetEngine {
             dst.outputStream().use(new::write)
         } }
     }
+    private fun setTableCell(cell: Cell, value: String) {
+        when {
+            value == "true" || value == "false" -> cell.setCellValue(value.toBoolean())
+            Regex("""-?(?:0|[1-9]\d*)(?:\.\d+)?""").matches(value) && value.count(Char::isDigit) <= 15 &&
+                value.toDoubleOrNull()?.let { it.isFinite() && java.math.BigDecimal.valueOf(it).compareTo(value.toBigDecimal()) == 0 } == true -> cell.setCellValue(value.toDouble())
+            else -> cell.setCellValue(value)
+        }
+    }
     fun export(tables: List<Table>,dst: File,to: Format,opt: ProOptions) {
         val table=tables.firstOrNull() ?: error("No matching sheets")
         val rows=table.rows
+        if (tables.size > 1 && to in setOf(CSV,TSV,TXT,SQL,JSON,XML)) {
+            require(opt.sheet.isNotBlank()) { "This output holds one table. Select a worksheet in Pro Lab or export all sheets to XLSX or HTML." }
+        }
         when(to) {
             XLS,XLSX -> (if(to==XLS) HSSFWorkbook() else XSSFWorkbook() as Workbook).use { book ->
                 tables.forEach { tab -> val sheet=book.createSheet(org.apache.poi.ss.util.WorkbookUtil.createSafeSheetName(tab.name))
-                    tab.rows.forEachIndexed { i,values -> val row=sheet.createRow(i); values.forEachIndexed { j,v -> row.createCell(j).setCellValue(v) } }
+                    tab.rows.forEachIndexed { i,values -> val row=sheet.createRow(i); values.forEachIndexed { j,v -> setTableCell(row.createCell(j),v) } }
                 }; dst.outputStream().use(book::write)
             }
             CSV,TSV,TXT -> dst.bufferedWriter().use { writer ->

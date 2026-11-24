@@ -11,56 +11,6 @@ import java.io.File
 import java.util.zip.ZipFile
 
 object LayoutEngine {
-    fun tablePdf(src:File,dst:File,opt:ProOptions):Boolean {
-        val html=Jsoup.parse(src,"UTF-8")
-        val tables=html.select("table")
-        if(tables.isEmpty()) return false
-        val portrait=if(opt.pageSize=="Letter") 612 to 792 else 595 to 842
-        val w=if(opt.landscape) portrait.second else portrait.first;val h=if(opt.landscape) portrait.first else portrait.second
-        val margin=opt.margin.coerceIn(12,72)
-        PdfDocument().use {doc->
-            var number=0
-            fun page()=doc.startPage(PdfDocument.PageInfo.Builder(w,h,++number).create())
-            var current=page();var y=margin.toFloat()
-            val ink=Paint(Paint.ANTI_ALIAS_FLAG)
-            fun advance(){doc.finishPage(current);current=page();y=margin.toFloat()}
-            for((index,table) in tables.withIndex()) {
-                if(index>0) advance()
-                val title=table.previousElementSibling()?.takeIf {it.tagName() in listOf("h1","h2","h3")}?.text()
-                if(title!=null){ink.color=Color.BLACK;ink.textSize=15f;current.canvas.drawText(title,margin.toFloat(),y+16,ink);y+=30}
-                val rows=table.select("tr")
-                val columns=rows.maxOfOrNull {it.childrenSize()} ?: continue
-                // Tile wide tables across pages to keep type readable.
-                val perPage=((w-margin*2)/65).coerceAtLeast(1)
-                for(first in 0 until columns step perPage) {
-                    if(first>0) advance()
-                    val n=minOf(columns-first,perPage);val cellWidth=(w-margin*2).toFloat()/n
-                    fun drawRow(row:Element,header:Boolean) {
-                        val paint=TextPaint(Paint.ANTI_ALIAS_FLAG).apply {textSize=10f;color=if(header) Color.WHITE else Color.BLACK;isFakeBoldText=header}
-                        val layouts=(0 until n).map { c -> val text=row.children().getOrNull(first+c)?.text().orEmpty()
-                            StaticLayout.Builder.obtain(text,0,text.length,paint,(cellWidth-8).toInt().coerceAtLeast(1)).setIncludePad(false).build()
-                        }
-                        var offset=0
-                        val total=layouts.maxOf {it.height}+8
-                        while(offset<total) {
-                            if(y+20>h-margin) advance()
-                            val height=minOf(total-offset,(h-margin-y).toInt())
-                            for((c,layout) in layouts.withIndex()) {
-                                val x=margin+c*cellWidth;val canvas=current.canvas
-                                ink.color=if(header) Color.rgb(38,66,119) else Color.WHITE;ink.style=Paint.Style.FILL
-                                canvas.drawRect(x,y,x+cellWidth,y+height,ink);ink.style=Paint.Style.STROKE;ink.color=Color.LTGRAY;ink.strokeWidth=.5f
-                                canvas.drawRect(x,y,x+cellWidth,y+height,ink);ink.style=Paint.Style.FILL
-                                canvas.save();canvas.clipRect(x+2,y,x+cellWidth-2,y+height);canvas.translate(x+4,y+4-offset);layout.draw(canvas);canvas.restore()
-                            }; y+=height;offset+=height
-                        }
-                    }
-                    rows.forEachIndexed {i,row->if(y+20>h-margin && i>0){advance();drawRow(rows.first()!!,true)};drawRow(row,i==0)}
-                }
-            }
-            doc.finishPage(current);dst.outputStream().use(doc::writeTo)
-        };return true
-    }
-
     fun slides(src:File,dst:File,opt:ProOptions) {
         ZipFile(src).use { zip ->
             fun xml(path:String):org.jsoup.nodes.Document {

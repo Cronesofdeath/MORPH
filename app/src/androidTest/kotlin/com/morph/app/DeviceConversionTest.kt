@@ -58,6 +58,19 @@ class DeviceConversionTest {
             assertEquals(50,doc.numberOfPages);assertEquals(89f,doc.getPage(49).mediaBox.width,0f)
         }
     }
+    @Test fun remuxPreservesBothAudioTracks()=runBlocking {
+        val input=File(dir,"three-streams.mkv")
+        MediaEngine.run(listOf("-f","lavfi","-i","testsrc2=size=160x120:rate=8:duration=1",
+            "-f","lavfi","-i","sine=frequency=330:duration=1","-f","lavfi","-i","sine=frequency=660:duration=1",
+            "-map","0:v","-map","1:a","-map","2:a","-c:v","libx264","-pix_fmt","yuv420p","-c:a","aac",input.path))
+        val output=File(dir,"output.mp4")
+        val stages=mutableListOf<String>()
+        MediaEngine.convert(input,output,MP4,ProOptions(),null) { stages+=it }
+        assertTrue(stages.toString(),stages.any { "Lossless remux" in it })
+        assertEquals(2,MediaEngine.probe(output).streams.count { it.type=="audio" })
+        SemanticOutputValidator.verify(output,MP4,ProOptions(),input,MKV)
+    }
+
     @Test fun archiveFamiliesRoundTrip()=runBlocking {
         val sample=File(dir,"note.txt").apply {writeText("A repeatable archive payload\n".repeat(50))}
         for(target in listOf(ZIP,TAR,TGZ,TBZ,TXZ,GZ,BZ,XZ,SEVEN)) {

@@ -9,6 +9,10 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.*
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
@@ -30,7 +34,7 @@ private val dismissedQueueJobs = stringSetPreferencesKey("dismissedQueueJobs")
 private val clearedVaultJobs = stringSetPreferencesKey("clearedVaultJobs")
 private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
 
-@Composable fun JobsPage(jobs:List<ConversionJob>,model:StudioModel,binary:Boolean,message:(String)->Unit) {
+@Composable fun JobsPage(choose:()->Unit,jobs:List<ConversionJob>,model:StudioModel,binary:Boolean,message:(String)->Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences by context.preferences.data.collectAsState(initial = emptyPreferences())
@@ -50,7 +54,11 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
         if (finishedIds.isNotEmpty()) {
             OutlinedButton({ dismiss(finishedIds) }) { Text("Clear finished") }
         }
-        if(visibleJobs.isEmpty()) Panel {Text("Your queue is empty",fontWeight=FontWeight.Bold); Text("Choose a file in Convert to start a job.")}
+        if(visibleJobs.isEmpty()) Column(Modifier.fillMaxWidth().heightIn(min=320.dp),horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.Center) {
+            Icon(Icons.Outlined.Layers,null,Modifier.size(42.dp))
+            Text("Your queue is empty",fontWeight=FontWeight.Bold,modifier=Modifier.padding(vertical=12.dp))
+            Button(choose) { Text("Choose files") }
+        }
         visibleJobs.groupBy {it.batch}.forEach { (_,group)->
             if(group.size>1 && group.all {it.status=="Complete"}) OutlinedButton({scope.launch {model.bundle(group)}}) {Text("Bundle ${group.size} outputs as ZIP")}
             group.forEach { job ->
@@ -139,17 +147,22 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
         }
     },confirmButton={TextButton({inspect=false}) {Text("Done")}})
 }
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable fun Vault(jobs:List<ConversionJob>,recipes:List<Recipe>,model:StudioModel,binary:Boolean,apply:(Recipe)->Unit,message:(String)->Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences by context.preferences.data.collectAsState(initial = emptyPreferences())
     val clearedJobs = preferences[clearedVaultJobs].orEmpty()
     val history = jobs.filter { it.status == "Complete" && it.id !in clearedJobs }
-    var tab by remember { mutableStateOf("History") }; var search by remember {mutableStateOf("")}
+    var tab by rememberSaveable { mutableStateOf("History") }; var search by rememberSaveable {mutableStateOf("")}
     Page("Vault","Outputs and recipes") {
-        Choices(listOf("History","Recipes"),tab) {tab=it}
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            listOf("History","Recipes").forEachIndexed { i,name ->
+                SegmentedButton(tab==name,{tab=name},SegmentedButtonDefaults.itemShape(i,2)) {Text(name)}
+            }
+        }
         if(tab=="History") {
-            OutlinedTextField(search,{search=it},label={Text("Search files")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            OutlinedTextField(search,{search=it},shape=RoundedCornerShape(18.dp),leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(search.isNotEmpty()) IconButton({search=""}) {Icon(Icons.Outlined.Close,"Clear search")}},label={Text("Search files")},singleLine=true,modifier=Modifier.fillMaxWidth())
             if (history.isNotEmpty()) {
                 OutlinedButton({
                     val ids = history.map { it.id }
@@ -162,7 +175,10 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
                 }) { Text("Clear history") }
             }
             val hits = history.filter { it.name.contains(search, true) }
-            if(hits.isEmpty()) Panel { Text(if(search.isBlank()) "Completed files appear here." else "No matching files.") }
+            if(hits.isEmpty()) Column(Modifier.fillMaxWidth().heightIn(min=240.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.Center) {
+                Icon(Icons.Outlined.Inventory2,null,Modifier.size(42.dp))
+                Text(if(search.isBlank()) "Completed files appear here." else "No matching files.",Modifier.padding(top=12.dp))
+            }
             hits.forEach { key(it.id) {JobCard(it,model,binary,message)} }
         } else {
             val defaults=listOf(Recipe("Legacy Excel to XLSX","XLSX",0,false,"{}"),Recipe("Exam portal photo","JPG",50*1024,false,"{}"),Recipe("Discord video","MP4",(9.8*1024*1024).toLong(),false,"{}"),Recipe("HEIC to JPEG","JPG",0,false,"{}"))
@@ -173,8 +189,8 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
 }
 @Composable fun Settings(mode:String,dynamic:Boolean,binary:Boolean) {
     val ctx=LocalContext.current; val scope=rememberCoroutineScope()
-    var search by remember {mutableStateOf("")}; var source by remember {mutableStateOf(Format.XLS)}
-    var health by remember {mutableStateOf("")}
+    var search by rememberSaveable {mutableStateOf("")}; var source by rememberSaveable {mutableStateOf(Format.XLS)}
+    var health by rememberSaveable {mutableStateOf("")}
     val graph=remember {ConversionGraphRouter()}
     val prefs by ctx.preferences.data.collectAsState(initial=emptyPreferences())
     val tree=prefs[stringPreferencesKey("outputTree")].orEmpty()
@@ -182,11 +198,11 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
         ctx.contentResolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         ctx.preferences.edit {it[stringPreferencesKey("outputTree")]=uri.toString()}
     }}
-    var storage by remember {mutableStateOf("")}
+    var storage by remember {mutableStateOf(emptyList<Pair<String,Long>>())}
     var refresh by remember {mutableIntStateOf(0)}
-    LaunchedEffect(refresh) {storage=withContext(Dispatchers.IO) {
+    LaunchedEffect(refresh,binary) {storage=withContext(Dispatchers.IO) {
         fun total(file:File)=file.walkTopDown().filter {it.isFile}.sumOf {it.length()}
-        "Saved outputs  "+bytes(total(File(ctx.filesDir,"exports")),binary)+"\nImported copies  "+bytes(total(File(ctx.filesDir,"imports")),binary)+"\nWorking files  "+bytes(total(File(ctx.cacheDir,"morph_work")),binary)
+        listOf("Saved outputs" to total(File(ctx.filesDir,"exports")),"Imported copies" to total(File(ctx.filesDir,"imports")),"Working files" to total(File(ctx.cacheDir,"morph_work")))
     } }
     Page("Settings","Appearance and diagnostics") {
         Panel {Label("Appearance")
@@ -195,17 +211,23 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
             Toggle("Binary size units (IEC)",binary) { v->scope.launch {ctx.preferences.edit {it[booleanPreferencesKey("binary")]=v}} }
         }
         Panel {Label("Storage")
-            Text(if(tree.isEmpty()) "Downloads/MORPH" else Uri.decode(tree.substringAfterLast('/')),style=mono)
-            Row {TextButton({picker.launch(null)}) {Text("Output folder")}
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                ListItem(headlineContent={Text("Output folder")},supportingContent={Text(if(tree.isEmpty()) "Downloads/MORPH" else Uri.decode(tree.substringAfterLast('/')))},leadingContent={Icon(Icons.Outlined.FolderOpen,null)},trailingContent={Icon(Icons.Outlined.ChevronRight,null)},modifier=Modifier.weight(1f).clickable {picker.launch(null)})
                 if(tree.isNotEmpty()) TextButton({scope.launch {ctx.preferences.edit {it.remove(stringPreferencesKey("outputTree"))}}}) {Text("Reset")}}
             Toggle("Save completed files automatically",prefs[booleanPreferencesKey("autoSave")] ?: (Build.VERSION.SDK_INT>=29)) {v->scope.launch {ctx.preferences.edit {it[booleanPreferencesKey("autoSave")]=v}}}
-            Text(storage,style=mono)
+            storage.forEach { (name,size) -> Row(Modifier.fillMaxWidth()) { Text(name,Modifier.weight(1f)); Text(bytes(size,binary),style=mono) } }
+            val total=storage.sumOf { it.second }
+            Row(Modifier.fillMaxWidth().height(5.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
+                storage.forEachIndexed { i, item ->
+                    if(item.second>0 && total>0) Spacer(Modifier.weight((item.second.toDouble()/total).toFloat()).fillMaxHeight().background(listOf(MaterialTheme.colorScheme.primary,MaterialTheme.colorScheme.secondary,MaterialTheme.colorScheme.tertiary)[i]))
+                }
+            }
             val age=prefs[intPreferencesKey("cacheDays")] ?: 7
             Label("Clear unused imports after")
             Choices(listOf("1 day","7 days","30 days"),if(age==1) "1 day" else "$age days") {v->scope.launch {ctx.preferences.edit {it[intPreferencesKey("cacheDays")]=v.substringBefore(' ').toInt()}}}
-            TextButton({scope.launch {withContext(Dispatchers.IO) {coil3.SingletonImageLoader.get(ctx).diskCache?.clear()}; refresh++}}) {Text("Clear thumbnail cache")}
+            ListItem(headlineContent={Text("Clear thumbnail cache")},supportingContent={Text("Remove cached file previews")},leadingContent={Icon(Icons.Outlined.CleaningServices,null)},trailingContent={Icon(Icons.Outlined.ChevronRight,null)},modifier=Modifier.fillMaxWidth().clickable { scope.launch {withContext(Dispatchers.IO) {coil3.SingletonImageLoader.get(ctx).diskCache?.clear()}; refresh++} })
         }
-        Panel {Label("Engine health")
+        Panel {Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) { Label("Engine health"); Text(if(health.isBlank()) "Unchecked" else "Checked",style=mono) }
             Button({scope.launch {health=withContext(Dispatchers.IO) {
                 listOf("FFmpeg" to { com.arthenica.ffmpegkit.FFmpegKitConfig.getFFmpegVersion() },
                     "PDFBox" to { com.tom_roush.pdfbox.pdmodel.PDDocument().use { "Ready" } },
@@ -213,7 +235,7 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
             } }}) {Text("Check engines")}
             if(health.isNotEmpty()) Text(health,style=mono)
         }
-        Panel {Label("Format explorer")
+        Panel {Label("Supported format graph explorer")
             OutlinedTextField(search,{search=it},label={Text("Find a source format")},singleLine=true)
             val formats=Format.entries.filter {it.label.contains(search,true)}
             Choices(formats.map {it.label},source.label) {s->source=formats.first {it.label==s}}

@@ -64,15 +64,57 @@ object DataEngine {
                 }
             }
             else -> {
-                val records=if(node.isArray) node.toList() else listOf(node)
+                val sourceRows=if(node.isArray) node.toList() else listOf(node)
+                val records = sourceRows.map { record ->
+                    require(record.isObject) { "A table requires rows of key/value pairs." }
+                    val flat = json.createObjectNode()
+                    fun visit(path: String, value: JsonNode) {
+                        if (value.isObject && !value.isEmpty) value.properties().forEach { (key, child) -> visit("$path.$key",child) }
+                        else if (value.isArray && !value.isEmpty) value.forEachIndexed { index, child -> visit("$path.$index",child) }
+                        else {
+                            require(!flat.has(path)) { "Two fields map to column '$path'. Rename one before flattening." }
+                            flat.set<JsonNode>(path,value)
+                        }
+                    }
+                    record.properties().forEach { (key,value) -> visit(key,value) }
+                    flat
+                }
                 require(records.all { it.isObject }) { "A table requires rows of key/value pairs" }
                 val keys=records.flatMap { it.fieldNames().asSequence().toList() }.distinct()
                 if(fmt==SQL) {
                     fun ident(s:String)="\""+s.replace("\"","\"\"")+"\""
                     dst.bufferedWriter().use { w ->
                         require(keys.isNotEmpty())
-                        w.appendLine("CREATE TABLE data ("+keys.joinToString { ident(it)+" TEXT" }+");")
-                        records.forEach { row -> w.appendLine("INSERT INTO data VALUES ("+keys.joinToString { k -> row.get(k)?.takeUnless { it.isNull }?.let { "'"+it.asText().replace("'","''")+"'" } ?: "NULL" }+");") }
+                        w.appendLine("CREATE TABLE data ("+keys.joinToString { ident(it) }+");")
+                        fun literal(value: JsonNode?): String = when {
+                            value == null || value.isNull -> "NULL"
+                            value.isBoolean -> if(value.booleanValue()) "TRUE" else "FALSE"
+                            value.isNumber -> value.toString()
+                            else -> "'" + (if(value.isContainerNode) value.toString() else value.asText()).replace("'","''") + "'"
+                        }
+                        records.forEach { row -> w.appendLine("INSERT INTO data VALUES ("+keys.joinToString { literal(row.get(it)) }+");") }
+                    }
+                } else if (fmt == XLSX) {
+                    org.apache.poi.xssf.usermodel.XSSFWorkbook().use { book ->
+                        val sheet=book.createSheet("Data")
+                        val header=sheet.createRow(0)
+                        keys.forEachIndexed { i,key -> header.createCell(i).setCellValue(key) }
+                        records.forEachIndexed { i,record ->
+                            val row=sheet.createRow(i+1)
+                            keys.forEachIndexed { j,key ->
+                                val value=record.get(key)
+                                if(value!=null && !value.isNull) {
+                                    val cell=row.createCell(j)
+                                    when {
+                                        value.isBoolean -> cell.setCellValue(value.booleanValue())
+                                        value.isNumber && value.decimalValue().precision() <= 15 && value.doubleValue().isFinite() -> cell.setCellValue(value.doubleValue())
+                                        value.isNumber || value.isContainerNode -> cell.setCellValue(value.toString())
+                                        else -> cell.setCellValue(value.asText())
+                                    }
+                                }
+                            }
+                        }
+                        dst.outputStream().use(book::write)
                     }
                 } else SpreadsheetEngine.export(listOf(SpreadsheetEngine.Table("Data",listOf(keys)+records.map { r -> keys.map { r[it]?.let { v -> if(v.isContainerNode) v.toString() else v.asText() }.orEmpty() } })),dst,fmt,opt)
             }

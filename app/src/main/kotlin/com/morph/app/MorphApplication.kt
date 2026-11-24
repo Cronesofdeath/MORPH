@@ -12,9 +12,11 @@ import androidx.datastore.preferences.core.intPreferencesKey
 
 @HiltAndroidApp
 class MorphApplication:Application() {
+    companion object { lateinit var instance: MorphApplication; private set }
     val database by lazy { Room.databaseBuilder(this,MorphDatabase::class.java,"morph.db").build() }
     override fun onCreate() {
         super.onCreate()
+        instance = this
         PDFBoxResourceLoader.init(this)
         // The worker runs in this process. At process start no worker owns an old sandbox.
         java.io.File(cacheDir,"morph_work").listFiles()?.forEach { it.deleteRecursively() }

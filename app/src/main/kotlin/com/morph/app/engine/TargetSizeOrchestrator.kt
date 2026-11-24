@@ -22,12 +22,21 @@ object TargetSizeOrchestrator {
             val out=File(folder,"stage-$index.${edge.to.extension}")
             val limit=target?.bytes?.takeIf { index==route.lastIndex }
             step("${edge.from.label} → ${edge.to.label}")
-            val result=when(edge.engine) {
+            val animated = edge.from in setOf(GIF,WEBP,PNG) && ImageStructure.animated(input,edge.from)
+            val result=if (animated && edge.to in setOf(GIF,WEBP)) {
+                if (edge.to == WEBP) {
+                    require(limit == null) { "Animated WebP size targeting is unavailable. Remove the size limit." }
+                    MediaEngine.run(listOf("-i",input.path,"-c:v","libwebp_anim","-loop","0",out.path))
+                } else MediaEngine.convert(input,out,GIF,opt,limit,step)
+                require(ImageStructure.animated(out,edge.to)) { "The encoder could not preserve the animation. Choose another target." }
+                out
+            } else when(edge.engine) {
                 Engine.IMAGE -> { ImageEngine.convert(input,out,edge.from,edge.to,opt,limit,step); out }
                 Engine.MEDIA -> { MediaEngine.convert(input,out,edge.to,opt,limit,step); out }
-                Engine.PDF -> PdfEngine.convert(input,out,edge.to,opt,limit)
+                Engine.PDF -> PdfEngine.convert(input,out,edge.to,opt,limit,step)
                 Engine.SHEET -> {
-                    if(edge.from in listOf(XLS,XLSX) && edge.to in listOf(XLS,XLSX)) SpreadsheetEngine.migrate(input,out,edge.to,opt)
+                    if (edge.from in listOf(XLS,XLSX) && edge.to == HTML) SpreadsheetEngine.html(input,out,opt)
+                    else if(edge.from in listOf(XLS,XLSX) && edge.to in listOf(XLS,XLSX)) SpreadsheetEngine.migrate(input,out,edge.to,opt)
                     else SpreadsheetEngine.export(SpreadsheetEngine.tables(input,edge.from,opt),out,edge.to,opt)
                     out
                 }
@@ -46,15 +55,17 @@ object TargetSizeOrchestrator {
                     val files=if(container || edge.from in FormatRegistry.archives)
                         ArchiveEngine.unpack(input,edge.from,File(folder,"unpack-$index"),opt) else listOf(src.name to input)
                     if(edge.to==RAW) {
-                        if(files.size==1) files.first().second.copyTo(File(folder,File(files.first().first).name+"-extracted."+File(files.first().first).extension),true)
+                        if(files.size==1 && !files.single().first.endsWith("/")) files.first().second.copyTo(File(folder,File(files.first().first).name+"-extracted."+File(files.first().first).extension),true)
                         else File(folder,"extracted.zip").also { ArchiveEngine.pack(files,it,ZIP,opt) }
                     } else {
                         ArchiveEngine.pack(files,out,edge.to,opt)
                         if(container && limit!=null && out.length()>limit) {
                             for((name,blob) in files) {
-                                val image=Format.named(name)
+                                val identity=MagicByteDetector.detect(blob,name)
+                                if (identity.isAnimated || identity.isMultiPage) continue
+                                val image=identity.actual
                                 if(image !in FormatRegistry.bitmapOutputs) continue
-                                val reduced=File(folder,"reduced.${image!!.extension}")
+                                val reduced=File(folder,"reduced.${image.extension}")
                                 val share=(blob.length()*(limit.toDouble()/out.length())*.90).toLong().coerceAtLeast(100)
                                 ImageEngine.convert(blob,reduced,image,image,opt,share,step)
                                 reduced.copyTo(blob,true); reduced.delete()
@@ -73,7 +84,7 @@ object TargetSizeOrchestrator {
                 val reduced=File(folder,"optimized.pdf"); PdfEngine.convert(input,reduced,PDF,opt.copy(pageRange=""),target.bytes); input=reduced
             }
             if(input.length()>target.bytes) throw TargetTooSmall(input.length())
-            if(target.exact && input.length()!=target.bytes) pad(input,Format.named(input.name) ?: to,target.bytes)
+            if(target.exact && input.length()!=target.bytes) pad(input,if (to.category == Category.IMAGE && from == PDF && MagicByteDetector.detect(input,input.name).actual == ZIP) ZIP else to,target.bytes)
             check(input.length()<=target.bytes && (!target.exact || input.length()==target.bytes))
         }
         return input
@@ -96,7 +107,7 @@ object TargetSizeOrchestrator {
             }
             io.seek(length)
             when(fmt) {
-                TXT,JSON,HTML -> fill(gap,32)
+                JSON -> fill(gap,32)
                 MOV,M4V,MP4 -> {
                     require(gap >= 8) { "MP4 padding needs at least eight bytes" }
                     val extended = gap > 0xffffffffL
@@ -133,7 +144,9 @@ object TargetSizeOrchestrator {
                 PDF -> {
                     val tail=ByteArray(minOf(length,2048).toInt()); io.seek(length-tail.size); io.readFully(tail)
                     val pos=tail.toString(Charsets.ISO_8859_1).lastIndexOf("startxref"); require(pos>=0)
-                    io.seek(length-tail.size+pos); fill(gap,32); io.write(tail,pos,tail.size-pos)
+                    io.seek(length-tail.size+pos)
+                    if (gap == 1L) io.write(10) else { io.write(37); fill(gap-2,32); io.write(10) }
+                    io.write(tail,pos,tail.size-pos)
                 }
                 else -> error("Exact-byte padding is unavailable for ${fmt.label}")
             }

@@ -23,6 +23,7 @@ import java.util.UUID
 
 class StudioModel(private val app:Application):AndroidViewModel(app) {
     val dao=(app as MorphApplication).database.dao()
+    val studioOptions = androidx.compose.runtime.mutableStateOf(ProOptions())
     val files=MutableStateFlow<List<Selection>>(emptyList())
     val importing=MutableStateFlow(false)
     val events=MutableSharedFlow<String>(extraBufferCapacity=8)
@@ -33,8 +34,14 @@ class StudioModel(private val app:Application):AndroidViewModel(app) {
     private suspend fun inspect(uri:Uri, persist:Boolean):Selection {
         require(uri.scheme=="content") { "Select a file from a document provider" }
         var name="input.bin"; var bytes=0L
-        resolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use { c ->
-            if(c.moveToFirst()) { name=c.getString(0) ?: name; bytes=c.getLong(1) }
+        // A readable document need not implement the optional metadata query.
+        runCatching {
+            resolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME,OpenableColumns.SIZE),null,null,null)?.use { c ->
+                if (c.moveToFirst()) {
+                    c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let { name=c.getString(it) ?: name }
+                    c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !c.isNull(it) }?.let { bytes=c.getLong(it) }
+                }
+            }
         }
         val retained=persist && runCatching { resolver.takePersistableUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION) }.isSuccess
         val stored=if(retained) uri else {
@@ -45,15 +52,20 @@ class StudioModel(private val app:Application):AndroidViewModel(app) {
         }
         return describe(stored,name,bytes)
     }
-    private fun describe(uri:Uri,name:String,size:Long):Selection {
-        val prefix=resolver.openInputStream(uri)!!.use { MagicByteDetector.detect(it,name) }
-        val detect=if(prefix.actual in listOf(Format.ZIP,Format.XLS,Format.DOC,Format.PPT,Format.XLSX,Format.DOCX,Format.PPTX,Format.GZ,Format.XZ,Format.BZ,Format.RAW)) {
-            runCatching {resolver.openFileDescriptor(uri,"r")?.use {fd->
-                if(fd.statSize<0) prefix else MagicByteDetector.detect(File("/proc/self/fd/${fd.fd}"),name)
-            }}.getOrNull() ?: prefix
-        } else prefix
+    private suspend fun describe(uri:Uri,name:String,size:Long):Selection {
+        var actualSize=size
+        val detect = if(uri.scheme=="file") {
+            ContentSniffer.detect(File(requireNotNull(uri.path)),name)
+        } else {
+            val cache = File.createTempFile("morph-inspect-",".bin",app.cacheDir)
+            try {
+                val source = resolver.openInputStream(uri) ?: error("This provider could not open the file.")
+                actualSize=source.use { stream -> cache.outputStream().use { stream.transfer(it,cache.usableSpace) } }
+                ContentSniffer.detect(cache,name)
+            } finally { cache.delete() }
+        }
         val detail=com.morph.app.engine.FileInspector.detail(app,uri,detect.actual)
-        return Selection(uri.toString(),name,size,detect.actual,detect.mismatch,detail)
+        return Selection(uri.toString(),name,actualSize,detect.actual,detect.mismatch,detail,detect.isAnimated,detect.isMultiPage)
     }
     private fun ingest(action:suspend ()->List<Selection>) {
         viewModelScope.launch {
@@ -69,12 +81,18 @@ class StudioModel(private val app:Application):AndroidViewModel(app) {
     fun pick(uris:List<Uri>,persist:Boolean=true,permission:android.view.DragAndDropPermissions?=null)=ingest {
         try {
             var failed = 0
+            var firstReason = ""
             val imported = uris.distinct().mapNotNull { uri ->
                 try { inspect(uri, persist) }
                 catch (e: CancellationException) { throw e }
-                catch (e: Exception) { failed++; null }
+                catch (e: Exception) {
+                    if (failed == 0) firstReason = MorphError.explain(e)
+                    android.util.Log.w("MorphImport","Document import failed",e)
+                    failed++
+                    null
+                }
             }
-            if (failed > 0) events.emit("Could not import $failed of ${imported.size + failed} files")
+            if (failed > 0) events.emit("Could not import $failed of ${imported.size + failed}. $firstReason")
             imported
         } finally { permission?.release() }
     }

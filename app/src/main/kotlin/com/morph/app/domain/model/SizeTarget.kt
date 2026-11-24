@@ -65,6 +65,8 @@ data class ProOptions(
     val inputPassword: String = ""
 )
 
+fun ProOptions.permitsCorrection() = copy(filename = ProOptions().filename, sha256 = true) == ProOptions()
+
 class TargetTooSmall(val minimum: Long) :
     IllegalArgumentException("Try a budget of ${java.text.NumberFormat.getIntegerInstance().format(minimum)} bytes with these settings.")
 

@@ -47,6 +47,9 @@ enum class Format(val extension: String, val category: Category, val mime: Strin
     HTML("html", Category.DOCUMENT, "text/html", "htm"),
     EPUB("epub", Category.DOCUMENT, "application/epub+zip"),
     ODT("odt", Category.DOCUMENT, "application/vnd.oasis.opendocument.text"),
+    SPREADSHEETML("xml", Category.SHEET, "application/xml"),
+    MHTML("mhtml", Category.DOCUMENT, "multipart/related", "mht"),
+    TS("ts", Category.VIDEO, "video/mp2t"),
     XLS("xls", Category.SHEET, "application/vnd.ms-excel"),
     XLSX("xlsx", Category.SHEET, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
     ODS("ods", Category.SHEET, "application/vnd.oasis.opendocument.spreadsheet"),
@@ -73,12 +76,12 @@ enum class Format(val extension: String, val category: Category, val mime: Strin
     B64("b64", Category.DATA, "text/plain"),
     RAW("bin", Category.DATA, "application/octet-stream");
 
-    val label: String get() = extension.uppercase()
+    val label: String get() = if (this == SPREADSHEETML) "SpreadsheetML" else extension.uppercase()
 
     fun supportsEncodingOn(api: Int): Boolean = this != HEIC || api >= 28
 
     companion object {
-        fun named(filename: String): Format? = entries.sortedByDescending { it.extension.length }
+        fun named(filename: String): Format? = entries.filter { it != SPREADSHEETML }.sortedByDescending { it.extension.length }
             .firstOrNull { item -> (listOf(item.extension) + item.aliases).any { filename.endsWith(".$it", true) } }
         fun basename(filename: String): String {
             val extension = named(filename) ?: return filename.substringBeforeLast('.', filename)

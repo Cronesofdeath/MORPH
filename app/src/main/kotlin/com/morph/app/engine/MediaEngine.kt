@@ -14,19 +14,21 @@ object MediaEngine {
     suspend fun run(args: List<String>,statistics: ((Statistics)->Unit)?=null) = suspendCancellableCoroutine<Unit> { continuation ->
         val session = FFmpegKit.executeWithArgumentsAsync((listOf("-y","-nostdin","-hide_banner","-loglevel","error","-protocol_whitelist","file,pipe,crypto") + args).toTypedArray(), {
             if (ReturnCode.isSuccess(it.returnCode)) continuation.resume(Unit)
-            else continuation.resumeWithException(IllegalArgumentException(it.output.orEmpty().takeLast(550).ifBlank { "The codec could not encode this file." }))
+            else continuation.resumeWithException(IllegalArgumentException("The codec could not process this stream. Try another output format or remove custom encoding settings."))
         },null,{ stats -> statistics?.invoke(stats) })
         continuation.invokeOnCancellation { FFmpegKit.cancel(session.sessionId) }
     }
 
-    suspend fun convert(src: File, dst: File, fmt: Format, opt: ProOptions, limit: Long?, step: suspend (String) -> Unit) {
-        val media = suspendCancellableCoroutine<MediaInformation> { continuation ->
+    suspend fun probe(src: File): MediaInformation = suspendCancellableCoroutine<MediaInformation> { continuation ->
             val session=FFprobeKit.getMediaInformationAsync(src.path) { result ->
                 val info=result.mediaInformation
                 if(info==null) continuation.resumeWithException(IllegalArgumentException("Unreadable media header")) else continuation.resume(info)
             }
             continuation.invokeOnCancellation {FFmpegKit.cancel(session.sessionId)}
         }
+
+    suspend fun convert(src: File, dst: File, fmt: Format, opt: ProOptions, limit: Long?, step: suspend (String) -> Unit) {
+        val media = probe(src)
         val start = opt.trimStart ?: 0.0
         val duration = min(opt.trimEnd ?: Double.MAX_VALUE, media.duration?.toDoubleOrNull() ?: Double.MAX_VALUE) - start
         suspend fun encode(args:List<String>,label:String) = kotlinx.coroutines.coroutineScope {
@@ -44,6 +46,29 @@ object MediaEngine {
                 }
             }
             try {run(args){stats.trySend(it)}} finally {stats.close();monitor.join()}
+        }
+        val active = media.streams.filter { it.type == "video" || it.type == "audio" || it.type == "subtitle" }
+        val remux = opt.permitsCorrection() && limit == null && when (fmt) {
+            MP4, MOV, M4V -> active.any { it.type == "video" } && media.streams.all { stream ->
+                when(stream.type) {
+                    "video" -> stream.codec == "h264" && stream.format == "yuv420p"
+                    "audio" -> stream.codec in setOf("aac","mp3","alac")
+                    "subtitle" -> stream.codec == "mov_text"
+                    else -> false
+                }
+            }
+            MKV -> active.any { it.type == "video" } && active.size == media.streams.size
+            M4A, AAC -> active.size == 1 && active.single().codec == "aac" && media.streams.size == 1
+            else -> false
+        }
+        if (remux) {
+            step("Lossless remux — zero re-encoding")
+            val args = mutableListOf("-i",src.path,"-map","0","-c","copy")
+            if (!opt.keepMetadata) args += listOf("-map_metadata","-1")
+            if (fmt in setOf(MP4,M4V,MOV,M4A)) args += listOf("-movflags","+faststart")
+            if (fmt == M4V) args += listOf("-f","mp4")
+            run(args + dst.path)
+            return
         }
         val input = buildList {
             if (start > 0) addAll(listOf("-ss",start.toString()))
@@ -84,13 +109,20 @@ object MediaEngine {
             var bitrate = limit?.let { (it * 8.0 * .97 / duration / 1000).toInt().coerceIn(8,320) } ?: 192
             repeat(4) {
                 val channels=when {fmt==AMR -> 1; opt.channels!=null -> opt.channels; fmt in listOf(WAV,AIFF) && limit!=null && limit*8.0*.97/duration<44100*32 -> 1;bitrate<48 -> 1;else -> 2}
-                val rate=opt.sampleRate ?: when {
+                val preferred=opt.sampleRate ?: when {
                     fmt==AMR -> 8000
                     fmt in listOf(WAV,AIFF) && limit!=null -> listOf(48000,44100,22050,16000,8000).firstOrNull {r->r*channels*16.0*duration/8+128<=limit}
                         ?: throw TargetTooSmall(ceil(8000*channels*16.0*duration/8+128).toLong())
                     fmt==AC3 -> if(bitrate<80) 32000 else 48000
                     fmt==OPUS -> when {bitrate<20->8000;bitrate<40->16000;else->48000}
                     bitrate<20 -> 8000;bitrate<40 -> 16000;bitrate<64 -> 22050;else->44100
+                }
+                val rate = when (fmt) {
+                    AMR -> 8000
+                    OPUS -> 48000
+                    AC3 -> listOf(32000,44100,48000).minBy { abs(it-preferred) }
+                    MP3 -> listOf(8000,11025,12000,16000,22050,24000,32000,44100,48000).minBy { abs(it-preferred) }
+                    else -> preferred
                 }
                 val valid=when(fmt) {
                     MP3 -> listOf(8,16,24,32,40,48,56,64,80,96,112,128,160,192,224,256,320)
@@ -111,6 +143,10 @@ object MediaEngine {
             WEBM -> "libvpx-vp9"; AVI -> "mpeg4"; WMV -> "wmv2"; FLV -> "flv"; GPP -> "mpeg4"
             else -> if (opt.videoCodec == "H.265") "libx265" else "libx264"
         }
+        require(media.streams.count { it.type == "video" } == 1) { "This file contains several video streams. Choose MKV without overrides to preserve them." }
+        val subtitles = media.streams.filter { it.type == "subtitle" }
+        val mp4Text = fmt in setOf(MP4,M4V,MOV) && subtitles.all { it.codec in setOf("subrip","mov_text","webvtt","text") }
+        require(subtitles.isEmpty() || fmt == MKV || mp4Text) { "This subtitle format cannot be preserved. Choose MKV without overrides." }
         val audioCodec = when(fmt) { WEBM -> "libopus"; WMV -> "wmav2"; AVI,FLV -> "libmp3lame"; else -> "aac" }
         val budget = limit?.let { TargetSizeConvergence.videoBudget(it,duration,hasAudio) }
         var video = budget?.video ?: 0
@@ -140,7 +176,8 @@ object MediaEngine {
                 }
                 step("Encoding pass 2 of 2")
             }
-            if (hasAudio) args += listOf("-map","0:a:0?","-c:a",audioCodec,"-b:a","${budget?.audio ?: 128}k","-ac",if ((budget?.audio ?: 128) <= 48) "1" else "2") else args += "-an"
+            if (hasAudio) args += listOf("-map","0:a?","-c:a",audioCodec,"-b:a","${budget?.audio ?: 128}k","-ac",if ((budget?.audio ?: 128) <= 48) "1" else "2") else args += "-an"
+            if (subtitles.isNotEmpty()) args += listOf("-map","0:s?","-c:s",if (fmt == MKV) "copy" else "mov_text")
             if (fmt in listOf(MP4,M4V,MOV) && opt.fastStart) args += listOf("-movflags","+faststart")
             if (fmt == M4V) args += listOf("-f","mp4")
             encode(input + args + dst.path,if(budget!=null) "Encoding pass 2 of 2" else "Encoding video")

@@ -30,14 +30,32 @@ object PdfEngine {
             }
         }.toList()
     }
-    suspend fun convert(src: File,dst: File,to: Format,opt: ProOptions,limit: Long?): File {
+    suspend fun convert(src: File,dst: File,to: Format,opt: ProOptions,limit: Long?,step: suspend (String)->Unit = {}): File {
         if(to==Format.TXT || to==Format.PDF) {
             PDDocument.load(src,MemoryUsageSetting.setupTempFileOnly().setTempDir(dst.parentFile)).use { doc ->
                 if(opt.pageRange.isNotBlank()) {
                     val selected=pages(opt.pageRange,doc.numberOfPages).toSet()
                     for(i in doc.numberOfPages-1 downTo 0) if(i !in selected) doc.removePage(i)
                 }
-                if(to==Format.TXT) { dst.writer().use { PDFTextStripper().writeText(doc,it) }; return dst }
+                if(to==Format.TXT) { require(doc.numberOfPages > 0) { "This PDF contains no pages." }
+                    val stripper = PDFTextStripper()
+                    dst.bufferedWriter().use { writer ->
+                        for (page in 1..doc.numberOfPages) {
+                            currentCoroutineContext().ensureActive()
+                            stripper.startPage = page
+                            stripper.endPage = page
+                            val embedded = stripper.getText(doc)
+                            val text = if (embedded.isNotBlank()) embedded else {
+                                step("Running offline OCR • Page $page/${doc.numberOfPages}")
+                                OfflineOcr.page(doc,page-1)
+                            }
+                            require(text.isNotBlank()) {
+                                "Page $page has no readable text after offline recognition. Export the pages as images or use a clearer scan."
+                            }
+                            writer.write(text)
+                        }
+                    }
+                    return dst }
                 doc.documentInformation=PDDocumentInformation()
                 doc.save(dst)
             }

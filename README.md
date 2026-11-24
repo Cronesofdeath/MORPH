@@ -4,7 +4,7 @@ MORPH is an offline Android file converter with byte-verified compression. Conve
 
 ## Download
 
-Get the [compact ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/download/v1.0.2/MORPH-arm64.apk) for most Android phones. The [MORPH 1.0.2 release](https://github.com/Cronesofdeath/MORPH/releases/tag/v1.0.2) also includes the universal APKs and SHA-256 checksums.
+Get the [compact ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/download/v1/MORPH-arm64.apk) for most Android phones. The [MORPH v1 release](https://github.com/Cronesofdeath/MORPH/releases/tag/v1) also includes the universal debug APK and SHA-256 checksums.
 
 ## Build
 

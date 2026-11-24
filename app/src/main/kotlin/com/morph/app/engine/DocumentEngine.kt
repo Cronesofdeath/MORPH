@@ -62,19 +62,28 @@ object DocumentEngine {
             PPT -> src.inputStream().use { HSLFSlideShow(it).use { deck -> deck.slides.mapIndexed { i,s ->
                 "Slide ${i+1}\n"+s.shapes.filterIsInstance<org.apache.poi.hslf.usermodel.HSLFTextShape>().joinToString("\n") { it.text.orEmpty() }
             } } }
-            HTML -> Jsoup.parse(src,"UTF-8").body().wholeText().lines()
+            HTML -> Jsoup.parse(com.morph.app.domain.graph.ContentText.reader(src).use { it.readText() }).body().wholeText().lines()
             MD -> {
                 val extensions=listOf(TablesExtension.create())
                 val html=HtmlRenderer.builder().extensions(extensions).build().render(MarkdownParser.builder().extensions(extensions).build().parse(src.readText()))
                 Jsoup.parse(html).body().wholeText().lines()
             }
             RTF -> RtfReader.text(src.readText(Charsets.ISO_8859_1)).lines()
-            else -> src.readLines()
+            else -> com.morph.app.domain.graph.ContentText.reader(src).use { it.readLines() }
         }
     }
-    fun convert(src: File,dst: File,from: Format,to: Format,opt: ProOptions) {
+    suspend fun convert(src: File,dst: File,from: Format,to: Format,opt: ProOptions) {
         if(from==PPTX && to==PDF) {LayoutEngine.slides(src,dst,opt);return}
-        if(from==HTML && to==PDF && LayoutEngine.tablePdf(src,dst,opt)) return
+        if(from in setOf(HTML, MD) && to==PDF) {
+            require(src.length() <= 8L shl 20) { "The report exceeds the layout memory limit." }
+            val text = com.morph.app.domain.graph.ContentText.reader(src).use { it.readText() }
+            val html = if (from == HTML) text else {
+                val extensions = listOf(TablesExtension.create())
+                HtmlRenderer.builder().escapeHtml(true).extensions(extensions).build().render(MarkdownParser.builder().extensions(extensions).build().parse(text))
+            }
+            WebPagePdf.write(html,dst,opt)
+            return
+        }
         if(from==MD && to==HTML) {
             val extensions=listOf(TablesExtension.create())
             val tree=src.reader().use {MarkdownParser.builder().extensions(extensions).build().parseReader(it)}

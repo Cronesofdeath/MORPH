@@ -11,13 +11,13 @@ object FormatRegistry {
     val singleStreams = setOf(GZ, BZ, XZ)
     val images = Format.entries.filter { it.category == Category.IMAGE }
     val bitmapOutputs = listOf(JPG, PNG, WEBP)
-    val stillOutputs = bitmapOutputs + listOf(HEIC, AVIF, BMP, TIFF, ICO, SVG, GIF, TGA)
+    val stillOutputs = bitmapOutputs + listOf(HEIC, AVIF, BMP, TIFF, ICO, GIF, TGA)
     val tables = listOf(XLS, XLSX, ODS, CSV, TSV)
     val structured = listOf(JSON, YAML, XML, TOML, INI, PROPERTIES)
     val documents = listOf(DOCX, DOC, RTF, TXT, MD, HTML, EPUB, ODT)
     val richCategories = setOf(Category.SLIDES)
     val documentDestinations = setOf(Category.DOCUMENT, Category.IMAGE, Category.ARCHIVE)
-    val exact = setOf(JPG, PNG, PDF, MP4, M4V, MOV, ZIP, TXT, HTML, JSON)
+    val exact = setOf(JPG, PNG, PDF, MP4, M4V, MOV, ZIP, JSON)
 
     val edges: List<ConversionEdge> = buildList {
         fun edge(from: Format, to: Format, engine: Engine, loss: Int = 1, speed: Int = 3) {
@@ -26,10 +26,10 @@ object FormatRegistry {
         for (source in images) {
             for (target in stillOutputs) {
                 if (source == GIF && target == GIF) continue
-                val engine = if (target in bitmapOutputs || target in listOf(PDF, SVG, HEIC)) Engine.IMAGE else Engine.MEDIA
+                val engine = if (target in bitmapOutputs || target in listOf(PDF, HEIC)) Engine.IMAGE else Engine.MEDIA
                 if (source != SVG || engine == Engine.IMAGE) edge(source, target, engine, if (target in listOf(JPG, AVIF, HEIC, GIF)) 2 else 1)
             }
-            if (source != HEIC) edge(source, PDF, Engine.IMAGE)
+            edge(source, PDF, Engine.IMAGE)
         }
         for (source in videos + GIF) {
             edge(source, FRAMES, Engine.MEDIA, 1, 8)
@@ -37,7 +37,8 @@ object FormatRegistry {
             if (source != GIF) for (target in audio + bitmapOutputs) edge(source, target, Engine.MEDIA, 3, 5)
         }
         for (source in audio) for (target in audio) edge(source, target, Engine.MEDIA, 1, 6)
-        for (source in tables) {
+        for (target in listOf(XLSX, CSV, TSV, JSON)) edge(HTML, target, Engine.SHEET)
+        for (source in tables + SPREADSHEETML) {
             for (target in tables + listOf(HTML, JSON, XML, TXT, SQL)) {
                 val richMigration = source in listOf(XLS, XLSX) && target in listOf(XLS, XLSX)
                 edge(source, target, Engine.SHEET, if (richMigration) 0 else if (target == TXT) 3 else 1)
@@ -68,6 +69,11 @@ object FormatRegistry {
     }
 
     fun meaningful(source: Format, target: Format, edge: ConversionEdge): Boolean {
+        if (edge.from != source && edge.to != target) return false
+        if (edge.to != target && edge.to !in setOf(HTML, TXT, PDF)) return false
+        if (edge.to != target && edge.to == HTML && target !in documents + PDF) return false
+        if (edge.to != target && edge.to == TXT && target !in documents) return false
+        if (edge.to != target && edge.to == PDF && target !in bitmapOutputs) return false
         if (edge.to in archives || edge.to in setOf(B64, RAW)) return edge.to == target
         if (source in archives || source == B64 || source == RAW) return false
         if (target in archives || target == B64) return false

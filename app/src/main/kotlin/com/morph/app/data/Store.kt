@@ -41,7 +41,7 @@ val Context.preferences by preferencesDataStore("morph")
 @Database(entities=[ConversionJob::class,Recipe::class],version=1)
 abstract class MorphDatabase:RoomDatabase() { abstract fun dao():MorphDao }
 
-data class Selection(val uri:String,val name:String,val size:Long,val format:Format,val mismatch:Boolean=false,val detail:String="")
+data class Selection(val uri:String,val name:String,val size:Long,val format:Format,val mismatch:Boolean=false,val detail:String="",val animated:Boolean=false,val multiPage:Boolean=false)
 fun ProOptions.encode()=JSONObject().apply {
     put("filename",filename); put("width",maxWidth); put("height",maxHeight); put("dpi",dpi); put("keep",keepMetadata)
     put("codec",videoCodec); put("fps",fps); put("mute",mute); put("start",trimStart); put("end",trimEnd)
@@ -88,7 +88,7 @@ object StorageManager {
     }
     fun uri(context:Context,file: File):Uri = FileProvider.getUriForFile(context,context.packageName+".files",file)
     suspend fun save(context:Context,file:File):Uri {
-        require(Build.VERSION.SDK_INT>=29) { "Choose a destination with the file picker" }
+        if (Build.VERSION.SDK_INT < 29) throw IllegalArgumentException("Choose a destination with the file picker")
         val resolver=context.contentResolver
         val prefs=context.preferences.data.first()
         val tree=prefs[androidx.datastore.preferences.core.stringPreferencesKey("outputTree")]
