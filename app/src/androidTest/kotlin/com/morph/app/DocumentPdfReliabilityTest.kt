@@ -6,6 +6,8 @@ import com.morph.app.domain.model.*
 import com.morph.app.domain.model.Format.*
 import com.morph.app.engine.*
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.*
@@ -22,6 +24,30 @@ class DocumentPdfReliabilityTest {
             val pdf=File(folder,format.name+".pdf")
             DocumentEngine.convert(input,pdf,format,PDF,ProOptions())
             PDDocument.load(pdf).use { assertTrue(it.numberOfPages > 0) }
+        }
+    }
+
+    @Test fun wideWorkbookPrintsTheRightmostColumnAndLastRow() = runBlocking {
+        val workbook = File(folder, "wide.xlsx")
+        XSSFWorkbook().use { book ->
+            val sheet = book.createSheet("Attendance")
+            for (r in 0 until 80) {
+                val row = sheet.createRow(r)
+                row.createCell(0).setCellValue("Row ${r + 1}")
+                row.createCell(67).setCellValue(if (r == 79) "EndMarker" else "Present")
+            }
+            sheet.setColumnWidth(0, 14 * 256)
+            sheet.setColumnWidth(67, 18 * 256)
+            workbook.outputStream().use(book::write)
+        }
+
+        val output = TargetSizeOrchestrator.convert(workbook, folder, XLSX, PDF, ProOptions(), null) {}
+        PDDocument.load(output).use { pdf ->
+            val content = PDFTextStripper().getText(pdf)
+            assertTrue(pdf.numberOfPages > 2)
+            assertTrue(content.contains("BP"))
+            assertTrue(content.contains("Row 80"))
+            assertTrue(content.contains("EndMarker"))
         }
     }
 

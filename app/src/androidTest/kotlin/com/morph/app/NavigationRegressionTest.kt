@@ -14,13 +14,17 @@ class NavigationRegressionTest {
 
     @Test fun tabsRestoreVaultSearch() {
         fun tab(name:String) = compose.onNodeWithTag("tab-$name")
+        val tabs = listOf("Settings", "Queue", "Convert", "Vault")
         tab("Vault").performClick()
         compose.onNode(hasSetTextAction()).performTextInput("persistent")
         repeat(3) {
-            tab("Settings").performClick()
-            tab("Queue").performClick()
-            tab("Convert").performClick()
-            tab("Vault").performClick()
+            for (name in tabs) {
+                tab(name).performClick()
+                compose.onNodeWithTag("panel-$name").assertIsDisplayed()
+                tabs.filter { it != name }.forEach { other ->
+                    compose.onNodeWithTag("panel-$other").assertDoesNotExist()
+                }
+            }
         }
         compose.onNode(hasSetTextAction() and hasText("persistent")).assertExists()
     }

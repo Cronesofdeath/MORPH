@@ -3,9 +3,13 @@ package com.morph.app.ui
 import android.content.*
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,16 +18,14 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import androidx.datastore.preferences.core.*
-import androidx.navigation.compose.*
-import androidx.navigation.NavGraph.Companion.findStartDestination
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.compose.ui.draw.clipToBounds
 import com.morph.app.*
 import com.morph.app.data.*
@@ -44,11 +46,13 @@ import java.io.File
         else -> lightColorScheme(primary=Color(0xff2563eb),primaryContainer=Color(0xffdbeafe),secondary=Color(0xff25549a),secondaryContainer=Color(0xffdbeafe),onSecondaryContainer=Color(0xff172554),tertiary=Color(0xff047857),background=Color(0xfff8f9fa),surface=Color.White,outlineVariant=Color(0xffd9dfe6))
     }.let { if(mode=="OLED") it.copy(background=Color.Black,surface=Color.Black) else it }
     MaterialTheme(colorScheme=colors) {
-        val scope=rememberCoroutineScope(); val nav=rememberNavController()
-        val active by nav.currentBackStackEntryAsState()
+        val scope=rememberCoroutineScope()
+        val tabStates = rememberSaveableStateHolder()
         val tabs=listOf("Convert","Queue","Vault","Settings")
         val icons=listOf(Icons.Outlined.Tune,Icons.Outlined.Layers,Icons.Outlined.Inventory2,Icons.Outlined.Settings)
-        val route=active?.destination?.route ?: tabs.first()
+        var route by rememberSaveable { mutableStateOf("Convert") }
+        var animatePanel by remember { mutableStateOf(false) }
+        BackHandler(enabled = route != "Convert") { route = "Convert" }
         val snack=remember { SnackbarHostState() }; val haptic=LocalHapticFeedback.current
         val files by model.files.collectAsState(); val jobs by model.jobs.collectAsState(); val recipes by model.recipes.collectAsState()
         var observed by remember {mutableStateOf<Set<String>?>(null)}
@@ -64,7 +68,11 @@ import java.io.File
         var enabled by rememberSaveable { mutableStateOf(false) }; var exact by rememberSaveable { mutableStateOf(false) }
         var shared by rememberSaveable { mutableStateOf(false) }; var combine by rememberSaveable { mutableStateOf(false) }
         val binary=prefs[booleanPreferencesKey("binary")] ?: true
-        fun changeTab(name:String) { nav.navigate(name) { popUpTo(nav.graph.findStartDestination().id) { saveState=true }; launchSingleTop=true; restoreState=true } }
+        fun changeTab(name:String) {
+            if (name == route) return
+            animatePanel = true
+            route = name
+        }
         fun message(text:String) { scope.launch { snack.showSnackbar(text) } }
         fun applyRecipe(r:Recipe) { destination=r.target; options=decodeOptions(r.options); exact=r.exact; enabled=r.budget>0; sizeValue=r.budget.toString(); unit="B"; changeTab("Convert") }
         LaunchedEffect(model) { model.events.collect { snack.showSnackbar(it) } }
@@ -75,8 +83,18 @@ import java.io.File
             } }
         }) { inset ->
             Surface(Modifier.fillMaxSize().padding(inset).consumeWindowInsets(inset).clipToBounds(),color=colors.background) {
-            NavHost(nav,"Convert",Modifier.fillMaxSize(),enterTransition={EnterTransition.None},exitTransition={ExitTransition.None},popEnterTransition={EnterTransition.None},popExitTransition={ExitTransition.None}) {
-                composable("Convert") {
+            tabStates.SaveableStateProvider(route) {
+            val entryOffset = remember(route) { Animatable(if (animatePanel) 1f else 0f) }
+            LaunchedEffect(entryOffset) {
+                if (entryOffset.value != 0f) {
+                    entryOffset.animateTo(0f, tween(durationMillis = 160, easing = FastOutSlowInEasing))
+                }
+            }
+            Box(Modifier.fillMaxSize().testTag("panel-$route").graphicsLayer {
+                translationY = 8.dp.toPx() * entryOffset.value
+            }) {
+            when (route) {
+                "Convert" -> {
                     val router=remember { ConversionGraphRouter() }
                     val targets=remember(files) {
                         files.firstOrNull()?.let { first -> router.targets(first.format).filter { goal ->
@@ -211,16 +229,18 @@ import java.io.File
                             scope.launch { try {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                 model.enqueue(selected!!,if(enabled) budget!! else 0,exact && selected in FormatRegistry.exact,options,shared,combine && canCombine)
-                                changeTab("Queue")
                                 if(Build.VERSION.SDK_INT>=33) notify.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                                changeTab("Queue")
                             } catch(e:Exception) { message(e.message ?: "Could not queue files") } }
                         },enabled=selected!=null && (!enabled || budget!=null) && !importing,modifier=Modifier.fillMaxWidth().height(54.dp)) { Text(if(files.size>1) "Convert ${files.size} files" else "Convert & compress") }
                     }
                     if(showFormats) FormatPickerSheet(targets,{selectedFormat->destination=selectedFormat.name; showFormats=false},{showFormats=false})
                 }
-                composable("Queue") { JobsPage({changeTab("Convert")},jobs,model,binary,::message) }
-                composable("Vault") { Vault(jobs,recipes,model,binary,::applyRecipe,::message) }
-                composable("Settings") { Settings(mode,dynamic,binary) }
+                "Queue" -> JobsPage({changeTab("Convert")},jobs,model,binary,::message)
+                "Vault" -> Vault(jobs,recipes,model,binary,::applyRecipe,::message)
+                "Settings" -> Settings(mode,dynamic,binary)
+            }
+            }
             }
             }
         }

@@ -35,7 +35,8 @@ object TargetSizeOrchestrator {
                 Engine.MEDIA -> { MediaEngine.convert(input,out,edge.to,opt,limit,step); out }
                 Engine.PDF -> PdfEngine.convert(input,out,edge.to,opt,limit,step)
                 Engine.SHEET -> {
-                    if (edge.from in listOf(XLS,XLSX) && edge.to == HTML) SpreadsheetEngine.html(input,out,opt)
+                    if (edge.to == PDF) SpreadsheetPdf.write(input,out,opt,step)
+                    else if (edge.from in listOf(XLS,XLSX) && edge.to == HTML) SpreadsheetEngine.html(input,out,opt)
                     else if(edge.from in listOf(XLS,XLSX) && edge.to in listOf(XLS,XLSX)) SpreadsheetEngine.migrate(input,out,edge.to,opt)
                     else SpreadsheetEngine.export(SpreadsheetEngine.tables(input,edge.from,opt),out,edge.to,opt)
                     out

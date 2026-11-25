@@ -8,7 +8,13 @@ import org.junit.Test
 class ConversionGraphRouterTest {
     private val graph=ConversionGraphRouter()
     @Test fun spreadsheetMigrationIsDirect() {assertEquals(listOf(XLSX),graph.route(XLS,XLSX)!!.map {it.to})}
-    @Test fun spreadsheetToPdfUsesTableRepresentation() {assertEquals(listOf(HTML,PDF),graph.route(XLS,PDF)!!.map {it.to})}
+    @Test fun spreadsheetToPdfUsesNativePagination() {
+        for (source in listOf(XLS, XLSX)) {
+            val edge = graph.route(source, PDF)!!.single()
+            assertEquals(Engine.SHEET, edge.engine)
+            assertEquals(PDF, edge.to)
+        }
+    }
     @Test fun heicCanReachPdf() {val path=graph.route(HEIC,PDF)!!; assertEquals(PDF,path.last().to); assertEquals(HEIC,path.first().from)}
     @Test fun jsonToWorkbookIsDirect() {assertEquals(listOf(XLSX),graph.route(JSON,XLSX)!!.map {it.to})}
     @Test fun unsupportedRouteIsAbsent() {assertNull(graph.route(MP3,XLSX))}

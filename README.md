@@ -10,12 +10,12 @@ Convert and compress files on Android, entirely on your device. MORPH identifies
 
 Requires **Android 8.0 or later**. HEIC encoding requires Android 9.0 or later.
 
-| Build | Use it on | Download size |
-|---|---|---:|
-| [ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-arm64.apk) | Most Android phones | 35.83 MiB |
-| [Universal APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-universal.apk) | ARM64 or x86-64 Android devices and emulators | 113.39 MiB |
+| Build | Use it on |
+|---|---|
+| [ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-arm64.apk) | Most Android phones |
+| [Universal APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-universal.apk) | ARM64 or x86-64 Android devices and emulators |
 
-Open the downloaded APK and follow Android’s installation prompt. Version 1.0.0 uses the existing development certificate for in-place updates. The [latest release](https://github.com/Cronesofdeath/MORPH/releases/latest) includes release notes and the [SHA-256 checksums](https://github.com/Cronesofdeath/MORPH/releases/latest/download/SHA256SUMS.txt).
+Open the downloaded APK and follow Android’s installation prompt. Version 1.1.0 uses the existing development certificate for in-place updates. The [latest release](https://github.com/Cronesofdeath/MORPH/releases/latest) includes download sizes, release notes, and [SHA-256 checksums](https://github.com/Cronesofdeath/MORPH/releases/latest/download/SHA256SUMS.txt).
 
 ## Quick start
 
@@ -24,6 +24,8 @@ Open the downloaded APK and follow Android’s installation prompt. Version 1.0.
 3. Tap **Convert & compress**. Open **Queue** to see progress and **Vault** to open or share the result.
 
 Try a 50 KiB cap with the [sample photo](APKs/Test%20files/messy-photo.png). MORPH detects the JPEG inside its `.png` filename.
+
+To export an Excel workbook, choose **PDF** as the output. MORPH prints wide XLS and XLSX worksheets in labeled column groups and paginates at row boundaries.
 
 ## Screenshots
 

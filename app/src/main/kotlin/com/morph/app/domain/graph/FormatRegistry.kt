@@ -39,6 +39,7 @@ object FormatRegistry {
         for (source in audio) for (target in audio) edge(source, target, Engine.MEDIA, 1, 6)
         for (target in listOf(XLSX, CSV, TSV, JSON)) edge(HTML, target, Engine.SHEET)
         for (source in tables + SPREADSHEETML) {
+            if (source == XLS || source == XLSX) edge(source, PDF, Engine.SHEET)
             for (target in tables + listOf(HTML, JSON, XML, TXT, SQL)) {
                 val richMigration = source in listOf(XLS, XLSX) && target in listOf(XLS, XLSX)
                 edge(source, target, Engine.SHEET, if (richMigration) 0 else if (target == TXT) 3 else 1)

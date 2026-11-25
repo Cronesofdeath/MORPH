@@ -1,5 +1,11 @@
 # MORPH release audit
 
+## Version 1.1.0, version code 7
+
+- Bottom tabs use a single visible panel with a short entry animation. Android 15 regression tests verified that switches dispose the outgoing panel, Vault search survives switching, and a shared file survives activity recreation.
+- Excel XLS and XLSX exports paginate into column groups and break at row boundaries. The Android regression checked the rightmost column and last row in a wide workbook. An additional file-picker run with a private 68-column, 19-row workbook produced 11 A4 pages, with the far-right totals and bottom rows present.
+- The debug JVM suite passed all 37 tests. The private workbook and its output stay outside version control.
+
 ## Version 1.0.0, version code 6
 
 Local release verification was performed on November 24, 2026. The packaged ARM64 build uses the existing Android development certificate. It can update the prior public APK for local testing. Production signing requires maintainer credentials.

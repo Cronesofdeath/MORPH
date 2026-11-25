@@ -72,7 +72,7 @@ object SpreadsheetEngine {
             }
         }
     }
-    private fun guardWorkbook(src: File) {
+    internal fun guardWorkbook(src: File) {
         require(src.length() <= 32L shl 20) { "Workbook exceeds the editing memory limit." }
         if (src.inputStream().use { it.read() } == 0x50) ZipFile(src).use { zip ->
             var bytes = 0L
