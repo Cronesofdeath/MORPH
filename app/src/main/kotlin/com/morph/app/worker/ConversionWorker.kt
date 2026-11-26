@@ -42,7 +42,10 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
     }
     override suspend fun doWork():Result = withContext(Dispatchers.IO) {
         val job=dao.job(id.toString()) ?: return@withContext Result.failure()
-        if(job.status=="Complete" && File(job.output).isFile) return@withContext Result.success()
+        if(job.status=="Complete" && File(job.output).isFile) {
+            if (job.stage == SAVING_OUTPUT) dao.updateCompletedStage(job.id, "Verified · Check the output folder")
+            return@withContext Result.success()
+        }
         if(job.status=="Cancelled") return@withContext Result.failure()
         val folder=File(ctx.cacheDir,"morph_work/$id")
         folder.deleteRecursively(); folder.mkdirs()
@@ -58,14 +61,8 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
             val combined = job.uri.startsWith("batch:")
             val options = decodeOptions(job.options)
             val target = Format.valueOf(job.target)
-            val input = File(File(folder, "source").apply { mkdirs() }, StorageManager.safe(job.name))
-            val (output, fmt) = processingSlot.withLock {
-                step("Reading file")
-                if (!combined) {
-                    val stream = ctx.contentResolver.openInputStream(Uri.parse(job.uri)) ?: error("Input file is unavailable")
-                    stream.use { source -> input.outputStream().use { source.transfer(it, folder.usableSpace) } }
-                }
-                val identity = if (combined) null else MagicByteDetector.detect(input, job.name)
+            suspend fun process(input: File?): Triple<File, Format, Long> {
+                val identity = input?.let { MagicByteDetector.detect(it, job.name) }
                 val detected = identity?.actual ?: Format.valueOf(job.source)
                 require(identity?.isEncrypted != true || (identity.mismatch && detected == target && job.budget == 0L && options.permitsCorrection())) { "This document is encrypted. Export an unlocked copy first." }
                 val outputDir = File(folder, "stages").apply { mkdirs() }
@@ -75,15 +72,33 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
                 } else if (identity?.mismatch == true && detected == target && size == null && options.permitsCorrection()) {
                     step("Verifying lossless format correction")
                     val corrected = File(outputDir, "corrected.${target.extension}")
-                    FileInspector.correctedCopy(input,corrected)
+                    FileInspector.correctedCopy(requireNotNull(input),corrected)
                 } else {
-                    TargetSizeOrchestrator.convert(input, outputDir, detected, target, options, size, ::step)
+                    TargetSizeOrchestrator.convert(requireNotNull(input), outputDir, detected, target, options, size, ::step)
                 }
                 if (result.name != "corrected.${target.extension}") {
                     step("Validating output")
-                    SemanticOutputValidator.verify(result, target, options, if (combined) null else input, detected)
+                    SemanticOutputValidator.verify(result, target, options, input, detected)
                 }
-                result to detected
+                return Triple(result, detected, input?.length() ?: job.original)
+            }
+            val (output, fmt, original) = processingSlot.withLock {
+                step("Reading file")
+                if (combined) return@withLock process(null)
+                val uri = Uri.parse(job.uri)
+                val sourceFormat = Format.valueOf(job.source)
+                val route = com.morph.app.domain.graph.ConversionGraphRouter().route(sourceFormat, target)
+                if (sourceFormat.category in setOf(Category.VIDEO, Category.AUDIO) &&
+                    route?.firstOrNull()?.engine == com.morph.app.domain.graph.Engine.MEDIA
+                ) {
+                    ctx.contentResolver.withLocalInput(uri) { process(it) }?.let { return@withLock it }
+                }
+                val directory = File(folder, "source").apply { mkdirs() }
+                val input = File(directory, StorageManager.safe(job.name))
+                require(job.original <= directory.usableSpace) { "This file needs more free storage for a temporary copy." }
+                val stream = ctx.contentResolver.openInputStream(uri) ?: error("Input file is unavailable")
+                stream.use { source -> input.outputStream().use { source.transfer(it, directory.usableSpace) } }
+                process(input)
             }
             val ext=output.extension.ifBlank { target.extension }
             val realExt=if(target.extension.contains('.') && output.name.endsWith(target.extension)) target.extension else ext
@@ -95,20 +110,20 @@ class ConversionWorker(private val ctx:Context,params:WorkerParameters):Coroutin
             if (!output.renameTo(exported)) {
                 output.inputStream().use { stream -> exported.outputStream().use { stream.transfer(it, exportFolder.usableSpace) } }
             }
-            val original = if (combined) job.original else input.length()
             folder.deleteRecursively()
             currentCoroutineContext().ensureActive()
+            val autoSave = Build.VERSION.SDK_INT >= 29 && ctx.preferences.data.first()[booleanPreferencesKey("autoSave")] != false
             withContext(NonCancellable) {
                 published = dao.complete(job.id, fmt.name, original,
-                    exported.path, exported.length(), hash) == 1
+                    exported.path, exported.length(), hash, if (autoSave) SAVING_OUTPUT else "Verified") == 1
             }
             if (!published) throw CancellationException()
-            val autoSave=ctx.preferences.data.first()[booleanPreferencesKey("autoSave")] ?: (Build.VERSION.SDK_INT>=29)
-            if(autoSave && Build.VERSION.SDK_INT>=29) {
+            if(autoSave) {
                 val summary = try {
                     StorageManager.save(ctx, exported)
-                    "Verified · Saved to output folder"
+                    SAVED_OUTPUT
                 } catch (e: CancellationException) {
+                    withContext(NonCancellable) { dao.updateCompletedStage(job.id, "Verified · Auto-save interrupted") }
                     throw e
                 } catch (e: Exception) {
                     "Verified · Auto-save failed. Save from Vault."

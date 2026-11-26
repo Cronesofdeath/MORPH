@@ -10,12 +10,9 @@ Convert and compress files on Android, entirely on your device. MORPH identifies
 
 Requires **Android 8.0 or later**. HEIC encoding requires Android 9.0 or later.
 
-| Build | Use it on |
-|---|---|
-| [ARM64 APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-arm64.apk) | Most Android phones |
-| [Universal APK](https://github.com/Cronesofdeath/MORPH/releases/latest/download/MORPH-universal.apk) | ARM64 or x86-64 Android devices and emulators |
+**[Download MORPH 1.0.0 for ARM64](https://github.com/Cronesofdeath/MORPH/releases/download/v1.0.0/MORPH-1.0.0-arm64.apk)** (33.4 MB)
 
-Open the downloaded APK and follow Android’s installation prompt. Version 1.1.0 uses the existing development certificate for in-place updates. The [latest release](https://github.com/Cronesofdeath/MORPH/releases/latest) includes download sizes, release notes, and [SHA-256 checksums](https://github.com/Cronesofdeath/MORPH/releases/latest/download/SHA256SUMS.txt).
+Open the downloaded APK and follow Android’s installation prompt. This build uses the existing development certificate and a higher Android version code for in-place updates from 1.1.0. See the [release notes](https://github.com/Cronesofdeath/MORPH/releases/tag/v1.0.0) and [SHA-256 checksum](https://github.com/Cronesofdeath/MORPH/releases/download/v1.0.0/MORPH-1.0.0-SHA256SUMS.txt).
 
 ## Quick start
 

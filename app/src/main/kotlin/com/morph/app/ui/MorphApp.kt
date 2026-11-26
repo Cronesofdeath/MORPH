@@ -36,7 +36,8 @@ import java.io.File
 
 @Composable fun MorphApp(model:StudioModel) {
     val context=LocalContext.current
-    val prefs by context.preferences.data.collectAsState(initial=emptyPreferences())
+    val visibility by model.jobVisibility.collectAsState()
+    val prefs = visibility.preferences ?: emptyPreferences()
     val mode=prefs[stringPreferencesKey("theme")] ?: "System"
     val dark=mode in listOf("Dark","OLED") || mode=="System" && isSystemInDarkTheme()
     val dynamic=prefs[booleanPreferencesKey("dynamic")] ?: false
@@ -176,8 +177,8 @@ import java.io.File
                                 val warnings = (files.flatMap { ConversionLossAnalyzer.advisories(it.format, selected,it.animated,it.multiPage) } + if(enabled && selected==Format.PDF) listOf("A tight PDF budget can rasterize pages and remove selectable text.") else emptyList()).distinct()
                                 if (warnings.isNotEmpty()) Surface(color=Color(0xffffedc2),contentColor=Color(0xff553600),shape=RoundedCornerShape(14.dp)) {
                                     Column(Modifier.padding(12.dp)) {
-                                        Text("Before converting",fontWeight=FontWeight.Bold)
-                                        warnings.forEach { Text(it) }
+                                        Text("Before converting",style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.Bold)
+                                        warnings.forEach { Text(it,style=MaterialTheme.typography.bodyMedium) }
                                     }
                                 }
                                 if(canCombine) Toggle("Combine into one file",combine) {combine=it}
@@ -236,8 +237,8 @@ import java.io.File
                     }
                     if(showFormats) FormatPickerSheet(targets,{selectedFormat->destination=selectedFormat.name; showFormats=false},{showFormats=false})
                 }
-                "Queue" -> JobsPage({changeTab("Convert")},jobs,model,binary,::message)
-                "Vault" -> Vault(jobs,recipes,model,binary,::applyRecipe,::message)
+                "Queue" -> JobsPage({changeTab("Convert")},visibility.queue(jobs),model,binary,::message)
+                "Vault" -> Vault(visibility.vault(jobs),recipes,model,binary,::applyRecipe,::message)
                 "Settings" -> Settings(mode,dynamic,binary)
             }
             }

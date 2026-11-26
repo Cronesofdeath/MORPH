@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.morph.app.data.ConversionJob
+import com.morph.app.data.SAVING_OUTPUT
 import com.morph.app.data.decodeOptions
 import com.morph.app.data.encode
 import com.morph.app.data.preferences
@@ -249,7 +250,7 @@ class DeviceStressTest {
             WorkManager.getInstance(app).enqueue(work)
             val record = withTimeout(30_000) {
                 var current = dao.job(id)!!
-                while (current.status in setOf("Queued", "Running") || current.stage == "Verified") {
+                while (current.status in setOf("Queued", "Running") || current.stage == SAVING_OUTPUT) {
                     delay(100)
                     current = dao.job(id)!!
                 }

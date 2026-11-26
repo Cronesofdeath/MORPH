@@ -9,11 +9,14 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
 import androidx.work.*
 import com.morph.app.data.*
 import com.morph.app.domain.graph.*
 import com.morph.app.domain.model.*
 import com.morph.app.engine.transfer
+import com.morph.app.engine.withLocalInput
 import com.morph.app.worker.ConversionWorker
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -33,11 +36,16 @@ class StudioModel(private val app:Application, savedState:SavedStateHandle):Andr
     private val submissionSlot = Mutex()
     val importing=MutableStateFlow(false)
     val events=MutableSharedFlow<String>(extraBufferCapacity=8)
+    private val visibility = MutableStateFlow(JobVisibility())
+    internal val jobVisibility = visibility.asStateFlow()
     val jobs=dao.jobs().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     val recipes=dao.recipes().stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
     private val resolver=app.contentResolver
     private val importSlot = Mutex()
     init {
+        viewModelScope.launch {
+            app.preferences.data.collect { saved -> visibility.update { it.loaded(saved) } }
+        }
         savedState.setSavedStateProvider("selection") {
             val snapshot = Bundle()
             var remaining = 64_000
@@ -56,6 +64,28 @@ class StudioModel(private val app:Application, savedState:SavedStateHandle):Andr
                 })
             }
             snapshot
+        }
+    }
+
+    internal fun dismissQueueJobs(ids: Collection<String>) = hideJobs(dismissedQueueJobs, ids)
+
+    internal fun clearVaultHistory(ids: Collection<String>) =
+        hideJobs(clearedVaultJobs, ids, "History cleared. Saved files and recipes are kept.")
+
+    private fun hideJobs(key: Preferences.Key<Set<String>>, ids: Collection<String>, done: String? = null) {
+        val changes = ids.toSet() - visibility.value.hidden(key).orEmpty()
+        if (changes.isEmpty()) return
+        visibility.update { it.hide(key, changes) }
+        viewModelScope.launch {
+            try {
+                app.preferences.edit { saved -> saved[key] = saved[key].orEmpty() + changes }
+                done?.let { events.emit(it) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                visibility.update { it.discard(key, changes) }
+                events.emit("Couldn't clear these entries. Try again.")
+            }
         }
     }
 
@@ -94,9 +124,15 @@ class StudioModel(private val app:Application, savedState:SavedStateHandle):Andr
     }
     private suspend fun describe(uri:Uri,name:String,size:Long):Selection {
         var actualSize=size
-        val detect = if(uri.scheme=="file") {
-            ContentSniffer.detect(File(requireNotNull(uri.path)),name)
-        } else {
+        val detect = resolver.withLocalInput(uri) { file ->
+            actualSize = file.length()
+            ContentSniffer.detect(file, name)
+        } ?: run {
+            val header = resolver.openInputStream(uri)?.use { ContentSniffer.detect(it, name) }
+                ?: error("This provider could not open the file.")
+            if (header.verified && header.actual.category in setOf(Category.VIDEO, Category.AUDIO)) {
+                return Selection(uri.toString(),name,size,header.actual,header.mismatch,"")
+            }
             val cache = File.createTempFile("morph-inspect-",".bin",app.cacheDir)
             try {
                 val source = resolver.openInputStream(uri) ?: error("This provider could not open the file.")

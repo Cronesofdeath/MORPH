@@ -30,29 +30,16 @@ import com.morph.app.engine.*
 import kotlinx.coroutines.*
 import java.io.File
 
-private val dismissedQueueJobs = stringSetPreferencesKey("dismissedQueueJobs")
-private val clearedVaultJobs = stringSetPreferencesKey("clearedVaultJobs")
-private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
-
-@Composable fun JobsPage(choose:()->Unit,jobs:List<ConversionJob>,model:StudioModel,binary:Boolean,message:(String)->Unit) {
-    val context = LocalContext.current
+@Composable fun JobsPage(choose:()->Unit,visibleJobs:List<ConversionJob>?,model:StudioModel,binary:Boolean,message:(String)->Unit) {
     val scope = rememberCoroutineScope()
-    val preferences by context.preferences.data.collectAsState(initial = emptyPreferences())
-    val dismissed = preferences[dismissedQueueJobs].orEmpty()
-    val visibleJobs = jobs.filter { it.id !in dismissed || it.status !in finishedJobStatuses }
-    val finishedIds = visibleJobs.filter { it.status in finishedJobStatuses }.map { it.id }
-
-    fun dismiss(ids: Collection<String>) {
-        scope.launch {
-            context.preferences.edit { current ->
-                current[dismissedQueueJobs] = current[dismissedQueueJobs].orEmpty() + ids
-            }
-        }
-    }
-
     Page("Queue", "Live conversions") {
+        if (visibleJobs == null) {
+            Text("Loading queue…")
+            return@Page
+        }
+        val finishedIds = visibleJobs.filter { it.status in finishedJobStatuses }.map { it.id }
         if (finishedIds.isNotEmpty()) {
-            OutlinedButton({ dismiss(finishedIds) }) { Text("Clear finished") }
+            OutlinedButton({ model.dismissQueueJobs(finishedIds) }) { Text("Clear finished") }
         }
         if(visibleJobs.isEmpty()) Column(Modifier.fillMaxWidth().heightIn(min=320.dp),horizontalAlignment=Alignment.CenterHorizontally, verticalArrangement=Arrangement.Center) {
             Icon(Icons.Outlined.Layers,null,Modifier.size(42.dp))
@@ -64,7 +51,7 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
             group.forEach { job ->
                 key(job.id) {
                     val remove: (() -> Unit)? = if (job.status in finishedJobStatuses) {
-                        { dismiss(listOf(job.id)) }
+                        { model.dismissQueueJobs(listOf(job.id)) }
                     } else null
                     JobCard(job, model, binary, message, remove)
                 }
@@ -76,8 +63,25 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
 @Composable fun JobCard(job:ConversionJob,model:StudioModel,binary:Boolean,message:(String)->Unit,remove:(()->Unit)?=null) {
     val ctx=LocalContext.current; val scope=rememberCoroutineScope()
     val file=File(job.output); var inspect by remember { mutableStateOf(false) }
+    var saving by remember(job.id) { mutableStateOf(false) }
     val create=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(Format.named(file.name)?.mime ?: "application/octet-stream")) { uri ->
-        if(uri!=null) scope.launch { runCatching { withContext(Dispatchers.IO) { ctx.contentResolver.openOutputStream(uri)!!.use { out -> file.inputStream().use { it.transfer(out) } } } }.onSuccess { message("File saved") }.onFailure { message(it.message ?: "Save failed") } }
+        if (uri == null) saving = false
+        else scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val destination = ctx.contentResolver.openOutputStream(uri) ?: error("Could not open the selected destination")
+                    destination.use { out -> file.inputStream().use { it.transfer(out) } }
+                }
+                withContext(NonCancellable) { model.dao.updateCompletedStage(job.id, SAVED_OUTPUT) }
+                message("File saved")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                message(e.message ?: "Save failed")
+            } finally {
+                saving = false
+            }
+        }
     }
     fun launch(send:Boolean) {
         runCatching { val uri=StorageManager.uri(ctx,file); val mime=Format.named(file.name)?.mime ?: "application/octet-stream"
@@ -100,9 +104,10 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
             Text(bytes(job.original,binary)+" → "+bytes(job.bytes,binary),style=mono)
             Row(Modifier.horizontalScroll(rememberScrollState())) {
                 TextButton({launch(false)}) {Text("Open")}; TextButton({launch(true)}) {Text("Share")}
-                TextButton({if(Build.VERSION.SDK_INT<29) create.launch(file.name) else scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { StorageManager.save(ctx,file) } }.onSuccess {message("Saved to output folder")}.onFailure {message(it.message ?: "Save failed")}
-                }}) {Text("Save")}; TextButton({inspect=true}) {Text("Inspect")}; TextButton({scope.launch { model.rerun(job) }}) {Text("Re-run")}
+                if (job.stage != SAVED_OUTPUT && job.stage != SAVING_OUTPUT) {
+                    TextButton(onClick = { saving = true; create.launch(file.name) }, enabled = !saving) { Text("Save") }
+                }
+                TextButton({inspect=true}) {Text("Inspect")}; TextButton({scope.launch { model.rerun(job) }}) {Text("Re-run")}
             }
         } else if(job.status in setOf("Queued","Running")) TextButton({model.cancel(job)}) {Text("Cancel")}
         else if(job.minimum>0) Button({scope.launch { model.rerun(job,job.minimum) }}) {Text("Use ${bytes(job.minimum,binary)}")}
@@ -148,12 +153,7 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
     },confirmButton={TextButton({inspect=false}) {Text("Done")}})
 }
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun Vault(jobs:List<ConversionJob>,recipes:List<Recipe>,model:StudioModel,binary:Boolean,apply:(Recipe)->Unit,message:(String)->Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val preferences by context.preferences.data.collectAsState(initial = emptyPreferences())
-    val clearedJobs = preferences[clearedVaultJobs].orEmpty()
-    val history = jobs.filter { it.status == "Complete" && it.id !in clearedJobs }
+@Composable fun Vault(history:List<ConversionJob>?,recipes:List<Recipe>,model:StudioModel,binary:Boolean,apply:(Recipe)->Unit,message:(String)->Unit) {
     var tab by rememberSaveable { mutableStateOf("History") }; var search by rememberSaveable {mutableStateOf("")}
     Page("Vault","Outputs and recipes") {
         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -163,15 +163,13 @@ private val finishedJobStatuses = setOf("Complete", "Failed", "Cancelled")
         }
         if(tab=="History") {
             OutlinedTextField(search,{search=it},shape=RoundedCornerShape(18.dp),leadingIcon={Icon(Icons.Outlined.Search,null)},trailingIcon={if(search.isNotEmpty()) IconButton({search=""}) {Icon(Icons.Outlined.Close,"Clear search")}},label={Text("Search files")},singleLine=true,modifier=Modifier.fillMaxWidth())
+            if (history == null) {
+                Text("Loading history…")
+                return@Page
+            }
             if (history.isNotEmpty()) {
                 OutlinedButton({
-                    val ids = history.map { it.id }
-                    scope.launch {
-                        context.preferences.edit { current ->
-                            current[clearedVaultJobs] = current[clearedVaultJobs].orEmpty() + ids
-                        }
-                        message("History cleared. Saved files and recipes are kept.")
-                    }
+                    model.clearVaultHistory(history.map { it.id })
                 }) { Text("Clear history") }
             }
             val hits = history.filter { it.name.contains(search, true) }

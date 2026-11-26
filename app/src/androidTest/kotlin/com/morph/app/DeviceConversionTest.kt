@@ -44,6 +44,39 @@ class DeviceConversionTest {
         assertTrue(streams.any {it.type=="audio"});assertTrue(streams.any {it.type=="video"})
         val frames=convert(original,MP4,FRAMES);ZipFile(frames).use {assertTrue(it.size()>=1)}
     }
+    @Test fun trimmedGifReadsFiveGigabyteContentUri() = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val sourceDir = File(context.filesDir, "exports/${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            val video = File(sourceDir, "large.mp4")
+            MediaEngine.run(listOf("-f", "lavfi", "-i", "testsrc2=size=160x120:rate=12:duration=3",
+                "-c:v", "libx264", "-movflags", "+faststart", video.path))
+            val fullLength = 5_000_000_000L
+            // A sparse MP4 free-space atom exercises 64-bit size and seek without writing 5 GB.
+            java.io.RandomAccessFile(video, "rw").use { mp4 ->
+                val start = mp4.length()
+                mp4.seek(start)
+                mp4.writeInt(1)
+                mp4.writeBytes("free")
+                mp4.writeLong(fullLength - start)
+                mp4.setLength(fullLength)
+            }
+            val uri = com.morph.app.data.StorageManager.uri(context, video)
+            val output = File(dir, "trimmed.gif")
+            val options = ProOptions(trimStart = 1.0, trimEnd = 2.0, maxWidth = 120)
+            val read = context.contentResolver.withLocalInput(uri) { input ->
+                assertEquals(fullLength, input.length())
+                MediaEngine.convert(input, output, GIF, options, 140_000L) {}
+                true
+            }
+            assertEquals(true, read)
+            assertTrue(output.length() in 1L..140_000L)
+            assertTrue(com.morph.app.domain.graph.ImageStructure.animated(output, GIF))
+            assertEquals(1.0, MediaEngine.probe(output).duration.toDouble(), 0.2)
+        } finally {
+            sourceDir.deleteRecursively()
+        }
+    }
     @Test fun batchPreservesOrderAndAllPages()=runBlocking {
         val ctx=InstrumentationRegistry.getInstrumentation().targetContext
         val sources=org.json.JSONArray()

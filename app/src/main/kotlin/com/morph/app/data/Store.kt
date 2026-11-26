@@ -19,6 +19,9 @@ import org.json.JSONObject
 
 val Context.preferences by preferencesDataStore("morph")
 
+const val SAVING_OUTPUT = "Verified · Saving to output folder…"
+const val SAVED_OUTPUT = "Verified · Saved to output folder"
+
 @Entity data class ConversionJob(@PrimaryKey val id:String, val uri:String,val name:String,val source:String,val target:String,
     val original:Long,val budget:Long,val exact:Boolean,val options:String,val batch:String,
     val status:String="Queued",val stage:String="",val output:String="",val bytes:Long=0,val hash:String="",val minimum:Long=0,
@@ -30,8 +33,8 @@ val Context.preferences by preferencesDataStore("morph")
     @Query("SELECT * FROM ConversionJob WHERE id=:id") suspend fun job(id:String): ConversionJob?
     @Query("UPDATE ConversionJob SET status = :status, stage = :stage, minimum = :minimum WHERE id = :id AND status IN ('Queued', 'Running')")
     suspend fun updateActive(id: String, status: String, stage: String, minimum: Long = 0): Int
-    @Query("UPDATE ConversionJob SET status = 'Complete', source = :source, stage = 'Verified', original = :original, output = :output, bytes = :bytes, hash = :hash WHERE id = :id AND status = 'Running'")
-    suspend fun complete(id: String, source: String, original: Long, output: String, bytes: Long, hash: String): Int
+    @Query("UPDATE ConversionJob SET status = 'Complete', source = :source, stage = :stage, original = :original, output = :output, bytes = :bytes, hash = :hash WHERE id = :id AND status = 'Running'")
+    suspend fun complete(id: String, source: String, original: Long, output: String, bytes: Long, hash: String, stage: String = "Verified"): Int
     @Query("UPDATE ConversionJob SET stage = :stage WHERE id = :id AND status = 'Complete'")
     suspend fun updateCompletedStage(id: String, stage: String)
     @Insert(onConflict=OnConflictStrategy.REPLACE) suspend fun save(job:ConversionJob)

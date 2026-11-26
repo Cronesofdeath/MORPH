@@ -35,8 +35,8 @@ android {
         applicationId = "com.morph.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.1.0"
+        versionCode = 8
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
@@ -86,7 +86,10 @@ android {
                 "META-INF/AL2.0",
                 "META-INF/LGPL2.1",
                 "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
-                "META-INF/INDEX.LIST"
+                "META-INF/INDEX.LIST",
+                // R8 removes the Picnic and SIKE implementations from the release DEX.
+                "org/bouncycastle/pqc/crypto/picnic/*.properties",
+                "org/bouncycastle/pqc/crypto/sike/*.properties"
             )
         }
     }

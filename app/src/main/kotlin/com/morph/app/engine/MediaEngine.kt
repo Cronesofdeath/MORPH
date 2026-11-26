@@ -88,10 +88,29 @@ object MediaEngine {
         if (fmt.category == Category.IMAGE) {
             if (fmt == GIF) {
                 val palette = File(dst.parentFile,"palette.png")
-                val filter = "fps=${opt.fps ?: 15},scale='min(${opt.maxWidth ?: 640},iw)':-1:flags=lanczos"
-                run(input + listOf("-vf","$filter,palettegen","-frames:v","1",palette.path))
-                val paletteInputs=input.toMutableList().apply { addAll(indexOf(src.path)+1,listOf("-i",palette.path)) }
-                run(paletteInputs + listOf("-lavfi","[0:v]$filter[x];[x][1:v]paletteuse","-loop","0",dst.path))
+                val gifInput = buildList {
+                    addAll(listOf("-threads", "2", "-filter_threads", "2", "-filter_complex_threads", "2"))
+                    if (start > 0) addAll(listOf("-ss", start.toString()))
+                    // Limit the input so palettegen receives EOF at the end of the selected clip.
+                    opt.trimEnd?.let { addAll(listOf("-t", (it - start).toString())) }
+                    addAll(listOf("-i", src.path))
+                }
+                var fps = (opt.fps ?: 15).coerceAtLeast(1)
+                var width = (opt.maxWidth ?: 640).coerceAtLeast(1)
+                repeat(if (limit == null) 1 else 3) {
+                    if (dst.exists()) check(dst.delete()) { "Could not discard the previous GIF attempt." }
+                    val filter = "fps=$fps,scale='min($width,iw)':-1:flags=lanczos"
+                    step("Building GIF palette")
+                    encode(gifInput + listOf("-map", "0:v:0", "-vf", "$filter,palettegen", "-frames:v", "1", palette.path), "Building GIF palette")
+                    step("Encoding GIF")
+                    val metadata = if (opt.keepMetadata) emptyList() else listOf("-map_metadata", "-1")
+                    encode(gifInput + listOf("-i", palette.path, "-filter_complex", "[0:v:0]$filter[x];[x][1:v:0]paletteuse[out]", "-map", "[out]", "-loop", "0") + metadata + dst.path, "Encoding GIF")
+                    if (limit == null || dst.length() <= limit) return
+                    val factor = sqrt(limit.toDouble() / dst.length()).coerceIn(.25, .85)
+                    fps = minOf(fps, (fps * sqrt(factor)).toInt().coerceAtLeast(2))
+                    width = minOf(width, (width * factor).toInt().coerceAtLeast(64))
+                }
+                throw TargetTooSmall(dst.length())
             } else {
                 val flags = when(fmt) {
                     AVIF -> listOf("-c:v","libaom-av1","-still-picture","1","-cpu-used","6")
